@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+# set -euo pipefail
 WORKDIR="$(pwd)"
 COOKIE_FILE="$WORKDIR/cookies.txt"
 
@@ -12,7 +12,6 @@ command -v jq >/dev/null 2>&1 || { echo "❌ jq ist nicht installiert"; exit 1; 
 USERNAME=""
 PASSWORD=""
 SEARCH_STRING=""
-SUBTITLES=0
 BILINGUAL=0
 EXTERNAL_DL=""
 LIMIT_RESULTS=0
@@ -23,7 +22,6 @@ while [[ "$#" -gt 0 ]]; do
         -u|--username) USERNAME="$2"; shift ;;
         -p|--password) PASSWORD="$2"; shift ;;
         -f|--filter) SEARCH_STRING="$2"; shift ;;
-        -s|--subtitles) SUBTITLES=1 ;;
         -b|--bilingual) BILINGUAL=1 ;;
         -e|--external-dl) EXTERNAL_DL="$2"; shift ;;
         -l|--limit-results) LIMIT_RESULTS="$2"; shift ;;
@@ -158,13 +156,12 @@ download_with_spinner() {
     elif (( BILINGUAL )); then
       yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*,fr.*,es.*" --embed-subs --merge-output-format mp4 ${URL} -o "$FILENAME"
     else
-      # yt-dlp --quiet --progress --no-warnings ${URL} -o "$FILENAME"
       ffmpeg -i ${URL} -map 0:v:0 -map 0:a:0 -c copy -stats -loglevel 0 "$FILENAME"
     fi
     
     EXIT_CODE=$?
 
-    if [[ -n "EXTERNAL_DL" ]]; then
+    if [[ -n "$EXTERNAL_DL" ]]; then
       if [[ "$metubeStatus" == "ok" ]]; then
         echo -e "\r✅ Download erfolgreich an Metube übergeben."
       else 
@@ -190,7 +187,7 @@ main() {
   echo "📝 Verfügbare Aufnahmen:"
   echo "------------------------"
   echo
-
+  
   SEARCH_LOWER=$(echo "$SEARCH_STRING" | tr '[:upper:]' '[:lower:]')
 
   # total amount (for column width)
