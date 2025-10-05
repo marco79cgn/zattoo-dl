@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
-SCRIPT_DIR="$(pwd)"
-COOKIE_FILE="$SCRIPT_DIR/cookies.txt"
+WORKDIR="$(pwd)"
+COOKIE_FILE="$WORKDIR/cookies.txt"
 
 # Prüfe ob Tools vorhanden sind
 command -v ffmpeg >/dev/null 2>&1 || { echo "❌ ffmpeg ist nicht installiert"; exit 1; }
@@ -327,7 +327,7 @@ main() {
   # echo "${SELECTED_NUMS[*]}"
   # echo
 
-  mkdir -p "$SCRIPT_DIR/output"
+  mkdir -p "$WORKDIR/output"
   i=1
   TOTAL=${#SELECTED_NUMS[@]}
   for NUM in "${SELECTED_NUMS[@]}"; do
@@ -346,7 +346,7 @@ main() {
       SAFE_TITLE=$(echo "$TITLE" | sed 's/[\/:*?"<>|\\]/ /g')
       SAFE_EPISODE=$(echo "$EPISODE" | sed 's/[\/:*?"<>|\\]/ /g')
 
-      BASE_FILENAME="$SCRIPT_DIR/output/${DATE_FORMATTED} ${SAFE_TITLE}"
+      BASE_FILENAME="$WORKDIR/output/${DATE_FORMATTED} ${SAFE_TITLE}"
       if [[ -n "$SAFE_EPISODE" && "$EPISODE" != "*" ]]; then
         BASE_FILENAME="${BASE_FILENAME} - ${SAFE_EPISODE}"
       fi
