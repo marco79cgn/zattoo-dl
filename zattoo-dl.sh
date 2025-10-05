@@ -1,5 +1,5 @@
 #!/bin/bash
-# set -euo pipefail
+
 WORKDIR="$(pwd)"
 COOKIE_FILE="$WORKDIR/cookies.txt"
 
