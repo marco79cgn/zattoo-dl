@@ -1,6 +1,8 @@
 # zattoo-dl
 A tool which lists all Zattoo recordings and downloads selected items.
 
+<img src="https://github.com/user-attachments/assets/2b21c5ac-26a3-45ba-953f-07905565851a" width="850"/>
+
 ## Docker
 A docker container can be built in three easy steps: 
 
