@@ -289,7 +289,7 @@ main() {
           [ -z "$part" ] && continue
 
           if echo "$part" | grep -Eq '^[0-9]+$'; then
-              if [ "$part" -lt 1 ] || [ "$part" -gt "$MAX_NUM" ]; then
+              if [ "$part" -lt 1 ] || [ "$part" -gt "$TOTAL" ]; then
                   echo "❌ Nummer $part außerhalb des gültigen Bereichs."
                   continue 2
               fi
