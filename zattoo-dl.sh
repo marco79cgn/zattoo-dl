@@ -156,7 +156,7 @@ download_with_spinner() {
     elif (( BILINGUAL )); then
       yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*,fr.*,es.*" --embed-subs --merge-output-format mp4 ${URL} -o "$FILENAME"
     else
-      ffmpeg -i ${URL} -map 0:v:0 -map 0:a:0 -c copy -stats -loglevel error "$FILENAME"
+      ffmpeg -y -i ${URL} -map 0:v:0 -map 0:a:0 -c copy -stats -loglevel fatal "$FILENAME"
     fi
     
     EXIT_CODE=$?
