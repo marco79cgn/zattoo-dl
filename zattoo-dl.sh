@@ -1,7 +1,9 @@
 #!/bin/bash
+trap 'echo; echo "⛔ Abgebrochen."; exit 130' INT
 
 WORKDIR="$(pwd)"
 COOKIE_FILE="$WORKDIR/cookies.txt"
+DOMAIN="zattoo.com"
 
 # Prüfe ob Tools vorhanden sind
 command -v ffmpeg >/dev/null 2>&1 || { echo "❌ ffmpeg ist nicht installiert"; exit 1; }
@@ -36,8 +38,6 @@ then
   echo "./zattoo-downloader.sh -u <username> -p <password>"
   exit 1
 fi
-
-DOMAIN="zattoo.com"
 
 # HTTP Header
 HEADERS=(
@@ -100,7 +100,7 @@ check_or_login() {
       return
     else
       echo
-      echo "⚠️  Cookie abgelaufen – neuer Login"
+      echo "⚠️  Cookie abgelaufen"
       login
     fi
   else
@@ -156,7 +156,7 @@ download_with_spinner() {
     elif (( BILINGUAL )); then
       yt-dlp --quiet --progress --no-warnings --audio-multistreams -f "bv+mergeall[vcodec=none]" --sub-langs "en.*,de.*,fr.*,es.*" --embed-subs --merge-output-format mp4 ${URL} -o "$FILENAME"
     else
-      ffmpeg -i ${URL} -map 0:v:0 -map 0:a:0 -c copy -stats -loglevel 0 "$FILENAME"
+      ffmpeg -i ${URL} -map 0:v:0 -map 0:a:0 -c copy -stats -loglevel error "$FILENAME"
     fi
     
     EXIT_CODE=$?
@@ -273,7 +273,7 @@ main() {
 
   # --- multiple choice ---
   while true; do
-      echo -n "Bitte gib die Nummern der Aufnahmen ein für den Download (z.B. 1,12-16): "
+      echo -n "🔢 Bitte gib die Nummern der Aufnahmen ein für den Download (z.B. 1,12-16): "
       read INPUT
 
       # Prüfen, dass nur Zahlen, Kommas, Bindestriche und Leerzeichen enthalten sind
@@ -320,9 +320,6 @@ main() {
   done
 
   echo
-  # echo "Gewählte Aufnahmen:"
-  # echo "${SELECTED_NUMS[*]}"
-  # echo
 
   mkdir -p "$WORKDIR/output"
   i=1
