@@ -17,8 +17,13 @@ docker build -t zattoo-dl .
 ```
 docker run --rm -it -v $(pwd)/:/data zattoo-dl -u 'username' -p 'password'
 ```
-In this example the current directory will be used `$(pwd)` where the command was executed. The downloads will be placed there as well. Instead of `$(pwd)` it's also possible to use a full qualified path: `-v /Users/marco/movies/zattoo:/data`
+In this example the current directory will be used `$(pwd)` where the command was executed. The downloads will be placed there as well. Be aware that `$(pwd)` is only availably on Linux/macOS. On Windows, always use the full qualified path with backslashes. Always make sure that these directories exist on the host and always mount them to `/data` inside the container: 
 
+|   platform  |        	path       		| 	 description      |
+|-------------|-------------------------|---------------------|
+| Linux/macOS | `$(pwd):/data` 	   			| current directory (where the docker command is executed) |
+| Linux/macOS | `/Users/marco/zattoo:/data`   | full path with `/` (slashes) |
+| Windows     | `C:\Users\marco\zattoo:/data` | full path with drive letter and `\` (backslashes) |
 
 ### CLI Parameters
 
@@ -35,5 +40,19 @@ This script supports the following parameters:
 
 ### Notes on Required Parameters
 
-- **Username (`-u`)** and **Password (`-p`)** are always required.  
-- All other parameters are optional.
+- **Username (`-u`)** and **Password (`-p`)** are always required
+- all other parameters are optional
+- `ffmpeg` is used by default and is the fastest option since it downloads all at once (one video and one audio stream)
+- for multiple audio languages (`--bilingual`) and embedded optional subtitles, `yt-dlp` will be used instead because `ffmpeg` can't handle embedded subtitles in `WebVTT` format
+- `yt-dlp` takes more time and leads to more i/o since every single audio, video and subtitle stream will be downloaded one after another (and multiplexed at the end)
+- when using `metube` as external yt-dlp downloader, make sure that it doesn't start too many downloads in parallel (because your Zattoo subscription only offers 1-4 streams at the same time)
+
+## Optional: run script natively (macOS & Linux)
+
+Docker is the recommended and easiest way. But it's also possible to run the script natively. The following tools have to be installed:
+
+- `curl` for http/api requests
+- `ffmpeg`
+- `yt-dlp` (includes ffmpeg)
+- `jq` as JSON command line parser
+- `gnu-tools` (echo, grep, awk, sed)
