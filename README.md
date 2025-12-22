@@ -49,7 +49,7 @@ This script supports the following parameters:
 - `yt-dlp` takes more time and leads to more i/o since every single audio, video and subtitle stream will be downloaded one after another (and multiplexed at the end)
 - when using `metube` as external yt-dlp downloader, make sure that it doesn't start too many downloads in parallel (because your Zattoo subscription only offers 1-4 streams at the same time)
 
-**Optional:**
+## Optional: use Github Docker image
 
 Instead of building the docker image yourself, you can use the existing one from this Github Repository: `ghcr.io/marco79cgn/zattoo-dl`. 
 
