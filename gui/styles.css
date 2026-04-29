@@ -356,8 +356,9 @@ code {
   max-width: 64px;
   object-fit: contain;
   flex-shrink: 0;
-  filter: brightness(0) invert(1);  /* schwarzes PNG → weiß auf dunklem BG */
-  opacity: 0.92;
+  /* Die /black/-Variante in der Logo-URL ist bereits für dunklen
+     Hintergrund optimiert (farbige Logos mit transparentem BG) —
+     kein Color-Filter nötig. */
 }
 
 .card-cid-fallback {
