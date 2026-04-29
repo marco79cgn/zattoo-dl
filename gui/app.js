@@ -386,7 +386,9 @@ function goToPage(page) {
 }
 
 function buildCardMeta(rec) {
-  const frag = document.createDocumentFragment();
+  // Eine einzige Zeile: Datum links, Logo am rechten Ende (margin-left: auto im CSS).
+  const meta = document.createElement('div');
+  meta.className = 'card-date';
 
   const buildCidFallback = () => {
     const span = document.createElement('span');
@@ -395,9 +397,10 @@ function buildCardMeta(rec) {
     return span;
   };
 
-  // Logo-Zeile ganz oben
-  const logoRow = document.createElement('div');
-  logoRow.className = 'card-logo-row';
+  const dateText = document.createElement('span');
+  dateText.textContent = formatDate(rec.start);
+  meta.appendChild(dateText);
+
   if (rec.logo_url) {
     const logo = document.createElement('img');
     logo.className = 'card-logo';
@@ -408,19 +411,12 @@ function buildCardMeta(rec) {
     logo.addEventListener('error', () => {
       logo.replaceWith(buildCidFallback());
     });
-    logoRow.appendChild(logo);
+    meta.appendChild(logo);
   } else if (rec.cid) {
-    logoRow.appendChild(buildCidFallback());
+    meta.appendChild(buildCidFallback());
   }
-  frag.appendChild(logoRow);
 
-  // Datum-Zeile darunter
-  const date = document.createElement('div');
-  date.className = 'card-date';
-  date.textContent = formatDate(rec.start);
-  frag.appendChild(date);
-
-  return frag;
+  return meta;
 }
 
 function buildCard(rec) {
@@ -465,6 +461,8 @@ function buildCard(rec) {
   ep.className = 'card-episode';
   ep.textContent = rec.episode || ' ';
   body.appendChild(ep);
+
+  
 
   const actions = document.createElement('div');
   actions.className = 'card-actions';
