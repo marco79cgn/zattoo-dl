@@ -6,11 +6,16 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const PAGE_SIZE = 15;
 const POLL_INTERVAL_MS = 750;
 
+// Muss zum CSS-Wert in styles.css `body { zoom: … }` passen — wir brauchen
+// das, um getBoundingClientRect()-Werte (Viewport-px) auf Body-px umzurechnen,
+// wenn wir absolut positionierte Elemente (z.B. das Download-Dropdown) setzen.
+const PAGE_ZOOM = 0.9;
+
 const TARGETS = {
   downie: 'Downie',
   metube: 'Metube',
   vlc: 'VLC',
-  local: 'Lokal',
+  local: 'Download',
 };
 
 const STATE = {
@@ -161,7 +166,7 @@ function renderDownloadsView() {
           </svg>
         </div>
         <p>Keine aktiven Downloads.</p>
-        <p class="muted">Klick auf einer Karte auf <strong>Lokal</strong>, um eine Aufnahme hier in die Queue zu legen.</p>
+        <p class="muted">Klick auf einer Karte auf <strong>Download</strong>, um eine Aufnahme hier in die Queue zu legen.</p>
       </div>`;
     return;
   }
@@ -551,14 +556,14 @@ function openMenu(anchor, card, rec) {
   menu.className = 'menu';
   const titleEl = document.createElement('div');
   titleEl.className = 'menu-title';
-  titleEl.textContent = 'Download via …';
+  titleEl.textContent = 'Optionen …';
   menu.appendChild(titleEl);
 
   const targets = [
     { id: 'downie', label: 'Downie' },
     { id: 'metube', label: 'Metube' },
     { id: 'vlc', label: 'VLC' },
-    { id: 'local', label: 'Lokal (ffmpeg / yt-dlp)' },
+    { id: 'local', label: 'Download' },
   ];
   for (const t of targets) {
     const btn = document.createElement('button');
@@ -572,12 +577,16 @@ function openMenu(anchor, card, rec) {
   }
 
   document.body.appendChild(menu);
+  // Body hat CSS `zoom: PAGE_ZOOM`, getBoundingClientRect liefert aber
+  // Viewport-Koordinaten. style.left/top setzen wir in Body-Koordinaten —
+  // also durch PAGE_ZOOM teilen, damit das Menü direkt unter dem Anker landet.
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth;
-  let left = r.right - mw;
-  if (left < 8) left = 8;
+  let left = r.right / PAGE_ZOOM - mw;
+  const minLeft = 8 / PAGE_ZOOM;
+  if (left < minLeft) left = minLeft;
   menu.style.left = `${left}px`;
-  menu.style.top = `${r.bottom + window.scrollY + 6}px`;
+  menu.style.top = `${(r.bottom + 6 + window.scrollY) / PAGE_ZOOM}px`;
   openMenuEl = menu;
   setTimeout(() => document.addEventListener('click', onDocClickClose, true), 0);
 }
