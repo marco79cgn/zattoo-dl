@@ -49,8 +49,16 @@ GUI_DIR = SCRIPT_DIR / "gui"
 
 CACHE_DIR = Path.home() / ".cache" / "zattoo-dl"
 PLAYLIST_CACHE = CACHE_DIR / "playlist.json"
+CHANNELS_CACHE = CACHE_DIR / "channels.json"
 THUMBS_DIR = CACHE_DIR / "thumbs"
 PLAYLIST_TTL = 300  # Sekunden
+CHANNELS_TTL = 24 * 60 * 60  # Sekunden — Logos ändern sich selten
+
+# Statischer Channels-Endpoint (liefert cid → logo_token + Metadaten)
+CHANNELS_URL = (
+    f"https://{DOMAIN}/zapi/v4/cached/5619555c306306c0c028ccddb3ece844/channels"
+)
+LOGO_URL_TEMPLATE = "https://images.zattic.com/logos/{token}/black/84x48.png"
 
 DEFAULT_PORT = 8765
 
@@ -810,6 +818,81 @@ class ZattooClient:
         PLAYLIST_CACHE.write_text(json.dumps(raw), "utf-8")
         return raw
 
+    # -- Channels / Logos --
+
+    def fetch_channels(self, *, force: bool = False) -> dict[str, str]:
+        """Liefert eine cid → logo_token Map (24h gecached).
+
+        Bei Fehler (z.B. nicht eingeloggt, URL-Schema geändert) wird ein
+        leerer Dict zurückgegeben — die GUI rendert dann CID-Text statt Logo.
+        """
+        if not force and CHANNELS_CACHE.exists():
+            age = time.time() - CHANNELS_CACHE.stat().st_mtime
+            if age < CHANNELS_TTL:
+                try:
+                    return json.loads(CHANNELS_CACHE.read_text("utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+        try:
+            raw = self._request("GET", CHANNELS_URL)
+        except (urllib.error.URLError, ZattooError, OSError):
+            return {}
+
+        # Echte API-Struktur: { "channels": [ { "cid": "rtl",
+        # "qualities": [ { "level": "hd", "logo_token": "..." },
+        # { "level": "sd", "logo_token": "..." } ], ... }, ... ] }
+        # Wir nehmen bevorzugt das HD-Logo, sonst SD, sonst das erste.
+        channels: list[dict[str, Any]] = []
+        flat = raw.get("channels")
+        if isinstance(flat, list):
+            channels = flat
+        # Fallback: manche Schemata haben channels in groups verschachtelt
+        if not channels:
+            groups = raw.get("channel_groups") or raw.get("groups")
+            if isinstance(groups, list):
+                for g in groups:
+                    if isinstance(g, dict):
+                        channels.extend(g.get("channels") or [])
+
+        def pick_logo_token(ch: dict[str, Any]) -> str | None:
+            # 1. logo_token direkt auf Channel-Ebene (manche API-Versionen)
+            t = ch.get("logo_token") or ch.get("logo_id")
+            if isinstance(t, str) and t:
+                return t
+            # 2. qualities[0].logo_token — bevorzugt 'hd', sonst erstes
+            qualities = ch.get("qualities")
+            if isinstance(qualities, list) and qualities:
+                hd = next(
+                    (q for q in qualities
+                     if isinstance(q, dict) and q.get("level") == "hd"),
+                    None,
+                )
+                pick = hd if hd else qualities[0]
+                if isinstance(pick, dict):
+                    t = pick.get("logo_token") or pick.get("logo_id")
+                    if isinstance(t, str) and t:
+                        return t
+            return None
+
+        cid_to_token: dict[str, str] = {}
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            cid = ch.get("cid")
+            if not isinstance(cid, str) or not cid:
+                continue
+            token = pick_logo_token(ch)
+            if token:
+                cid_to_token[cid] = token
+
+        if cid_to_token:
+            try:
+                CHANNELS_CACHE.write_text(json.dumps(cid_to_token), "utf-8")
+            except OSError:
+                pass
+        return cid_to_token
+
     # -- Stream-URL (lazy, on demand) --
 
     def stream_url(self, recording_id: str) -> str:
@@ -984,20 +1067,33 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(500, {"error": f"Recordings-Fehler: {e}"})
             return
 
+        # Channel-Logos einmalig holen (24h-Cache) und auf jede Aufnahme anwenden
+        try:
+            channels_map = self.client.fetch_channels()
+        except Exception:  # noqa: BLE001
+            channels_map = {}
+
         items = []
         for r in data.get("recordings", []):
             rid = r.get("id") or r.get("program_id") or ""
             if not rid:
                 continue
             thumb = extract_thumbnail_url(r)
+            cid = r.get("cid") or ""
+            logo_url = None
+            if cid:
+                token = channels_map.get(cid)
+                if token:
+                    logo_url = LOGO_URL_TEMPLATE.format(token=token)
             items.append({
                 "id": str(rid),
-                "cid": r.get("cid") or "",
+                "cid": cid,
                 "title": r.get("title") or "",
                 "episode": r.get("episode_title") or "",
                 "start": r.get("start") or "",
                 "end": r.get("end") or "",
                 "thumbnail": thumb,
+                "logo_url": logo_url,
             })
         self._send_json(200, {"recordings": items, "count": len(items)})
 

@@ -329,22 +329,6 @@ code {
   background: linear-gradient(135deg, rgba(124,92,255,0.10), rgba(0,212,255,0.06));
 }
 
-.thumb-cid {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  padding: 4px 9px;
-  border-radius: var(--radius-pill);
-  background: rgba(0,0,0,0.55);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #f7f8fc;
-}
-
 .card-body {
   padding: 14px 14px 12px;
   display: flex;
@@ -354,12 +338,39 @@ code {
 }
 
 .card-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   color: var(--text-mute);
   letter-spacing: 0.01em;
   margin-bottom: 2px;
+  min-height: 22px;  /* Logo-Höhe — hält das Layout stabil, auch ohne Logo */
+}
+
+.card-logo {
+  height: 22px;
+  width: auto;
+  max-width: 64px;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: brightness(0) invert(1);  /* schwarzes PNG → weiß auf dunklem BG */
+  opacity: 0.92;
+}
+
+.card-cid-fallback {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .card-title {

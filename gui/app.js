@@ -385,6 +385,39 @@ function goToPage(page) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+function buildCardMeta(rec) {
+  const meta = document.createElement('div');
+  meta.className = 'card-date';
+
+  const buildCidFallback = () => {
+    const span = document.createElement('span');
+    span.className = 'card-cid-fallback';
+    span.textContent = (rec.cid || '?').toUpperCase();
+    return span;
+  };
+
+  if (rec.logo_url) {
+    const logo = document.createElement('img');
+    logo.className = 'card-logo';
+    logo.src = rec.logo_url;
+    logo.alt = rec.cid || '';
+    logo.loading = 'lazy';
+    logo.decoding = 'async';
+    logo.addEventListener('error', () => {
+      logo.replaceWith(buildCidFallback());
+    });
+    meta.appendChild(logo);
+  } else if (rec.cid) {
+    meta.appendChild(buildCidFallback());
+  }
+
+  const dateText = document.createElement('span');
+  dateText.textContent = formatDate(rec.start);
+  meta.appendChild(dateText);
+
+  return meta;
+}
+
 function buildCard(rec) {
   const card = document.createElement('article');
   card.className = 'card';
@@ -393,13 +426,6 @@ function buildCard(rec) {
   // --- Thumbnail
   const thumbWrap = document.createElement('div');
   thumbWrap.className = 'thumb';
-
-  if (rec.cid) {
-    const cidBadge = document.createElement('span');
-    cidBadge.className = 'thumb-cid';
-    cidBadge.textContent = rec.cid;
-    thumbWrap.appendChild(cidBadge);
-  }
 
   if (rec.thumbnail) {
     const img = document.createElement('img');
@@ -423,10 +449,7 @@ function buildCard(rec) {
   const body = document.createElement('div');
   body.className = 'card-body';
 
-  const date = document.createElement('div');
-  date.className = 'card-date';
-  date.textContent = formatDate(rec.start);
-  body.appendChild(date);
+  body.appendChild(buildCardMeta(rec));
 
   const title = document.createElement('div');
   title.className = 'card-title';
