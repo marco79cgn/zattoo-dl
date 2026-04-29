@@ -526,7 +526,9 @@ def _run_ffmpeg(job: DownloadJob, output_path: Path) -> None:
                 pass
         elif key == "speed":
             v = val.strip()
-            job.speed = "" if v in ("N/A", "") else f"{v} (Encoder)"
+            # ffmpeg liefert "5.2x" = Verarbeitung relativ zur Echtzeit.
+            # Bei -c copy ist das primär Netzwerk-/Disk-IO-bound, kein Encoding.
+            job.speed = "" if v in ("N/A", "") else v
         elif key == "progress" and val == "end":
             break
 
