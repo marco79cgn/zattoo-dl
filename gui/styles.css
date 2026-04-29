@@ -337,26 +337,18 @@ code {
   flex: 1;
 }
 
-.card-date {
+.card-logo-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-mute);
-  letter-spacing: 0.01em;
-  margin-bottom: 2px;
-  min-height: 22px;  /* Logo-Höhe — hält das Layout stabil, auch ohne Logo */
+  min-height: 24px;  /* hält das Layout stabil, auch wenn kein Logo lädt */
+  margin-bottom: 4px;
 }
 
 .card-logo {
-  height: 22px;
+  height: 24px;
   width: auto;
-  max-width: 64px;
+  max-width: 80px;
   object-fit: contain;
-  flex-shrink: 0;
-  margin-left: auto;  /* schiebt das Logo ans rechte Ende der Meta-Zeile */
   /* Die /black/-Variante in der Logo-URL ist bereits für dunklen
      Hintergrund optimiert (farbige Logos mit transparentem BG) —
      kein Color-Filter nötig. */
@@ -373,7 +365,15 @@ code {
   background: var(--surface-2);
   border: 1px solid var(--border);
   flex-shrink: 0;
-  margin-left: auto;  /* gleicher Effekt wie beim Logo, falls Fallback greift */
+}
+
+.card-date {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-mute);
+  letter-spacing: 0.01em;
+  margin-bottom: 2px;
 }
 
 .card-title {
