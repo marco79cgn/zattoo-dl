@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zattoo-DL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span class="brand-name">Zattoo<span class="brand-name-dim">·DL</span></span>
+    </div>
+
+    <div class="topbar-actions" hidden id="topbarActions">
+      <div class="search">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M10 2a8 8 0 1 1-5.293 14.293l-3.207 3.207-1.414-1.414 3.207-3.207A8 8 0 0 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/>
+        </svg>
+        <input id="filterInput" type="search" placeholder="Filtern nach Titel oder Episode…" autocomplete="off">
+      </div>
+
+      <button class="icon-btn" id="refreshBtn" title="Aufnahmen neu laden" aria-label="Refresh">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 0 1 5.196 9l1.464 1.464A8 8 0 0 0 12 4zm-7.196 4A8 8 0 0 0 12 20v3l4-4-4-4v3a6 6 0 0 1-5.196-9L4.804 8z"/>
+        </svg>
+      </button>
+
+      <button class="icon-btn" id="settingsBtn" title="Einstellungen" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.43 5.94l-1.86-1.07a7.62 7.62 0 0 0 0-1.74l1.86-1.07a.5.5 0 0 0 .12-.66l-1.76-3.05a.5.5 0 0 0-.61-.22l-2.18.88a7.65 7.65 0 0 0-1.5-.87l-.33-2.32a.5.5 0 0 0-.5-.43h-3.52a.5.5 0 0 0-.5.43l-.33 2.32a7.65 7.65 0 0 0-1.5.87l-2.18-.88a.5.5 0 0 0-.61.22L3.49 9.4a.5.5 0 0 0 .12.66l1.86 1.07a7.62 7.62 0 0 0 0 1.74l-1.86 1.07a.5.5 0 0 0-.12.66l1.76 3.05c.13.23.41.32.61.22l2.18-.88c.46.34.96.64 1.5.87l.33 2.32c.04.25.25.43.5.43h3.52c.25 0 .46-.18.5-.43l.33-2.32c.54-.23 1.04-.53 1.5-.87l2.18.88c.2.1.48.01.61-.22l1.76-3.05a.5.5 0 0 0-.12-.66z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Stats / filter bar -->
+  <section class="stats" hidden id="statsBar">
+    <div class="stats-left">
+      <span id="countLabel">0 Aufnahmen</span>
+      <span class="dot">·</span>
+      <span id="filteredLabel" class="muted">0 angezeigt</span>
+    </div>
+    <div class="stats-right">
+      <span class="muted">Standard-Ziel:</span>
+      <span class="chip" id="defaultTargetChip">Downie</span>
+    </div>
+  </section>
+
+  <!-- Recordings grid -->
+  <main class="grid" id="grid"></main>
+
+  <!-- Pagination -->
+  <nav class="pagination" id="pagination" hidden aria-label="Seitennavigation"></nav>
+
+  <!-- Empty / loading state -->
+  <div class="state" id="emptyState" hidden>
+    <div class="state-inner">
+      <h2 id="emptyTitle">Keine Aufnahmen gefunden</h2>
+      <p id="emptyText" class="muted">Sobald du bei Zattoo Aufnahmen hast, erscheinen sie hier.</p>
+    </div>
+  </div>
+
+  <div class="state" id="loadingState">
+    <div class="state-inner">
+      <div class="spinner"></div>
+      <p class="muted">Aufnahmen werden geladen…</p>
+    </div>
+  </div>
+
+  <!-- Login modal -->
+  <div class="modal" id="loginModal" hidden>
+    <div class="modal-card">
+      <header class="modal-head">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <span class="brand-name">Zattoo<span class="brand-name-dim">·DL</span></span>
+        </div>
+        <p class="muted">Mit deinem Zattoo-Account anmelden</p>
+      </header>
+      <form id="loginForm" class="form" autocomplete="on">
+        <label class="field">
+          <span>E-Mail / Benutzername</span>
+          <input id="loginUser" type="text" required autocomplete="username">
+        </label>
+        <label class="field">
+          <span>Passwort</span>
+          <input id="loginPass" type="password" required autocomplete="current-password">
+        </label>
+        <p class="error" id="loginError" hidden></p>
+        <button class="btn-primary btn-block" type="submit" id="loginSubmit">Anmelden</button>
+        <p class="hint muted">
+          Deine Zugangsdaten werden ausschließlich an Zattoo gesendet
+          und nicht gespeichert. Der Cookie wird in <code>cookies.txt</code> abgelegt.
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2>Einstellungen</h2>
+        <button class="icon-btn" id="settingsClose" aria-label="Schließen">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </header>
+
+      <form id="settingsForm" class="form">
+        <label class="field">
+          <span>Standard-Download-Ziel</span>
+          <div class="segmented segmented-3">
+            <input type="radio" id="targetDownie" name="target" value="downie">
+            <label for="targetDownie">Downie</label>
+            <input type="radio" id="targetVlc" name="target" value="vlc">
+            <label for="targetVlc">VLC</label>
+            <input type="radio" id="targetMetube" name="target" value="metube">
+            <label for="targetMetube">Metube</label>
+          </div>
+        </label>
+
+        <label class="field">
+          <span>Metube Host:Port</span>
+          <input id="metubeHost" type="text" placeholder="192.168.178.14:8086">
+          <small class="muted">Nur nötig, wenn Metube als Download-Ziel verwendet wird.</small>
+        </label>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="logoutBtn">Abmelden</button>
+          <button type="submit" class="btn-primary">Speichern</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
