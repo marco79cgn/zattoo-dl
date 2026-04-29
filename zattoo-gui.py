@@ -631,6 +631,19 @@ def _run_ffmpeg(job: DownloadJob, output_path: Path) -> None:
 
     job.process = proc
 
+    speed_x = 0.0  # zuletzt gesehener Speed-Multiplier (z.B. 7.83)
+
+    def _update_eta() -> None:
+        """ETA = (Restdauer des Videos) / Speed-Multiplier."""
+        if job.total_seconds <= 0:
+            return
+        remaining_playback = max(0.0, job.total_seconds - job.current_seconds)
+        if speed_x > 0:
+            job.eta = _format_eta(remaining_playback / speed_x)
+        else:
+            # Noch kein gültiger Speed-Wert — temporär die rohe Restdauer zeigen
+            job.eta = _format_eta(remaining_playback)
+
     while True:
         if job.cancelled.is_set():
             _safe_run_terminate(proc)
@@ -652,8 +665,7 @@ def _run_ffmpeg(job: DownloadJob, output_path: Path) -> None:
                 job.current_seconds = us / 1_000_000
                 if job.total_seconds > 0:
                     job.percent = min(99.9, (job.current_seconds / job.total_seconds) * 100)
-                    remaining = job.total_seconds - job.current_seconds
-                    job.eta = _format_eta(remaining)
+                _update_eta()
             except ValueError:
                 pass
         elif key == "speed":
@@ -661,6 +673,9 @@ def _run_ffmpeg(job: DownloadJob, output_path: Path) -> None:
             # ffmpeg liefert "5.2x" = Verarbeitung relativ zur Echtzeit.
             # Bei -c copy ist das primär Netzwerk-/Disk-IO-bound, kein Encoding.
             job.speed = "" if v in ("N/A", "") else v
+            m = re.match(r"([\d.]+)x", v)
+            speed_x = float(m.group(1)) if m else 0.0
+            _update_eta()
         elif key == "progress" and val == "end":
             break
 
