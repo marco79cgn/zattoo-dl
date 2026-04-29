@@ -47,6 +47,13 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
+/* Globaler 90 %-Zoom — skaliert das gesamte Layout proportional, inkl.
+   sticky Topbar, Modals und Toasts. Native Browser-Zoom-Funktionalität,
+   sodass Scrollbars und Hit-Targets sauber mitgehen. */
+body {
+  zoom: 0.9;
+}
+
 a { color: inherit; }
 
 code {
