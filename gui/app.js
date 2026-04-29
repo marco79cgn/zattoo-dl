@@ -4,11 +4,13 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const PAGE_SIZE = 15;
+const POLL_INTERVAL_MS = 750;
 
 const TARGETS = {
   downie: 'Downie',
-  vlc: 'VLC',
   metube: 'Metube',
+  vlc: 'VLC',
+  local: 'Lokal',
 };
 
 const STATE = {
@@ -17,6 +19,10 @@ const STATE = {
   page: 1,
   settings: loadSettings(),
 };
+
+// recording_id → { jobId } für Polling und Re-Render-Persistenz
+const ACTIVE_JOBS = new Map();
+let pollTimer = null;
 
 const els = {
   topbarActions: $('#topbarActions'),
@@ -45,9 +51,8 @@ const els = {
   settingsForm: $('#settingsForm'),
   settingsClose: $('#settingsClose'),
   metubeHost: $('#metubeHost'),
-  targetDownie: $('#targetDownie'),
-  targetVlc: $('#targetVlc'),
-  targetMetube: $('#targetMetube'),
+  defaultTarget: $('#defaultTarget'),
+  bilingualToggle: $('#bilingualToggle'),
   logoutBtn: $('#logoutBtn'),
 
   toasts: $('#toasts'),
@@ -61,6 +66,7 @@ function loadSettings() {
   return {
     target: TARGETS[s.target] ? s.target : 'downie',
     metubeHost: typeof s.metubeHost === 'string' ? s.metubeHost : '',
+    bilingual: !!s.bilingual,
   };
 }
 
@@ -310,6 +316,23 @@ function buildCard(rec) {
   const actions = document.createElement('div');
   actions.className = 'card-actions';
 
+  // Wenn für diese Aufnahme ein lokaler Download läuft → Progress statt Button
+  if (ACTIVE_JOBS.has(rec.id)) {
+    renderProgress(actions, {
+      state: 'running', percent: 0, speed: '', eta: '',
+      message: 'Lädt…',
+    });
+  } else {
+    actions.appendChild(buildSplitButton(card, rec));
+  }
+
+  body.appendChild(actions);
+
+  card.appendChild(body);
+  return card;
+}
+
+function buildSplitButton(card, rec) {
   const split = document.createElement('div');
   split.className = 'split';
 
@@ -332,18 +355,19 @@ function buildCard(rec) {
 
   split.appendChild(main);
   split.appendChild(toggle);
-  actions.appendChild(split);
-  body.appendChild(actions);
-
-  card.appendChild(body);
-  return card;
+  return split;
 }
 
 function setMainButtonLabel(btn) {
   const label = TARGETS[STATE.settings.target] || 'Downie';
-  const icon = STATE.settings.target === 'vlc'
-    ? '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>'
-    : '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M5 20h14v-2H5v2zm7-18l-5.5 5.5L8 9l3-3v8h2V6l3 3 1.5-1.5L12 2z" transform="rotate(180 12 12)"/></svg>';
+  let icon;
+  if (STATE.settings.target === 'vlc') {
+    icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>';
+  } else if (STATE.settings.target === 'local') {
+    icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>';
+  } else {
+    icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M5 20h14v-2H5v2zm7-18l-5.5 5.5L8 9l3-3v8h2V6l3 3 1.5-1.5L12 2z" transform="rotate(180 12 12)"/></svg>';
+  }
   btn.innerHTML = `${icon}<span>${label}</span>`;
 }
 
@@ -383,6 +407,7 @@ function openMenu(anchor, card, rec) {
     { id: 'downie', label: 'Downie' },
     { id: 'metube', label: 'Metube' },
     { id: 'vlc', label: 'VLC' },
+    { id: 'local', label: 'Lokal (ffmpeg / yt-dlp)' },
   ];
   for (const t of targets) {
     const btn = document.createElement('button');
@@ -416,6 +441,16 @@ async function triggerDownload(card, rec, target) {
   if (target === 'metube' && !STATE.settings.metubeHost) {
     toast('Bitte zuerst in den Einstellungen den Metube-Host eintragen.', 'error', 4500);
     openSettings();
+    return;
+  }
+
+  // Lokaler Download: Progress-Komponente einsetzen, Polling starten
+  if (target === 'local') {
+    if (ACTIVE_JOBS.has(rec.id)) {
+      toast('Download für diese Aufnahme läuft bereits.', 'info', 2500);
+      return;
+    }
+    await startLocalDownload(card, rec);
     return;
   }
 
@@ -462,6 +497,182 @@ async function triggerDownload(card, rec, target) {
     main.disabled = false;
     toggle.disabled = false;
   }
+}
+
+/* --- Local-Download mit Progress-Polling -------------------------------- */
+
+async function startLocalDownload(card, rec) {
+  const actions = card.querySelector('.card-actions');
+  if (!actions) return;
+
+  // Kurz „URL wird geholt" anzeigen, bis das Backend einen job_id liefert
+  renderProgress(actions, {
+    state: 'queued', percent: 0, speed: '', eta: '',
+    queue_position: 0, message: 'Stream-URL wird geholt…',
+  });
+
+  let jobId;
+  try {
+    const { ok, status, body } = await api('/api/download', {
+      method: 'POST',
+      body: JSON.stringify({
+        recording_id: rec.id,
+        target: 'local',
+        filename: safeFilename(rec),
+        bilingual: STATE.settings.bilingual,
+      }),
+    });
+    if (!ok) {
+      restoreCardActions(card, rec);
+      toast(`Download fehlgeschlagen: ${body.error || status}`, 'error', 5000);
+      return;
+    }
+    jobId = body.job_id;
+  } catch (e) {
+    restoreCardActions(card, rec);
+    toast(`Netzwerk-Fehler: ${e.message}`, 'error', 4500);
+    return;
+  }
+
+  ACTIVE_JOBS.set(rec.id, { jobId });
+  renderProgress(actions, {
+    state: 'queued', percent: 0, speed: '', eta: '',
+    queue_position: 1, message: 'In Queue…',
+  });
+  startPolling();
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(pollAllJobs, POLL_INTERVAL_MS);
+}
+
+function stopPollingIfIdle() {
+  if (ACTIVE_JOBS.size === 0 && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function pollAllJobs() {
+  // Snapshot, damit wir während Iteration mutieren dürfen
+  const snapshot = Array.from(ACTIVE_JOBS.entries());
+  await Promise.all(snapshot.map(([recId, ctx]) => pollOne(recId, ctx.jobId)));
+}
+
+async function pollOne(recId, jobId) {
+  let body;
+  try {
+    const r = await api(`/api/download/${jobId}/progress`);
+    if (!r.ok) {
+      // 404: Job vom Backend vergessen — wir geben auf
+      finishJob(recId, jobId, 'error', r.body.error || `HTTP ${r.status}`);
+      return;
+    }
+    body = r.body;
+  } catch (e) {
+    return; // Netzwerk-Hickup, einfach beim nächsten Tick erneut versuchen
+  }
+
+  const card = document.querySelector(`.card[data-id="${CSS.escape(recId)}"]`);
+  if (card) {
+    const actions = card.querySelector('.card-actions');
+    if (actions) renderProgress(actions, body);
+  }
+
+  if (body.state === 'done') {
+    finishJob(recId, jobId, 'done');
+  } else if (body.state === 'error') {
+    finishJob(recId, jobId, 'error', body.error);
+  } else if (body.state === 'cancelled') {
+    finishJob(recId, jobId, 'cancelled');
+  }
+}
+
+function finishJob(recId, jobId, state, error) {
+  ACTIVE_JOBS.delete(recId);
+  stopPollingIfIdle();
+
+  const rec = STATE.recordings.find(r => r.id === recId);
+  const title = rec ? `„${rec.title}"` : 'Aufnahme';
+
+  if (state === 'done') {
+    toast(`${title} fertig heruntergeladen.`, 'success', 4000);
+  } else if (state === 'error') {
+    toast(`Download fehlgeschlagen: ${error || 'unbekannt'}`, 'error', 6000);
+  } else if (state === 'cancelled') {
+    toast(`${title}: Download abgebrochen.`, 'info', 3000);
+  }
+
+  // Nach 1.5s zurück zum normalen Button (User hat Zeit, den finalen State zu sehen)
+  setTimeout(() => {
+    const card = document.querySelector(`.card[data-id="${CSS.escape(recId)}"]`);
+    if (card && rec) restoreCardActions(card, rec);
+  }, state === 'done' ? 1500 : 600);
+}
+
+async function cancelJob(recId) {
+  const ctx = ACTIVE_JOBS.get(recId);
+  if (!ctx) return;
+  try {
+    await api(`/api/download/${ctx.jobId}/cancel`, { method: 'POST' });
+  } catch {}
+}
+
+function renderProgress(actionsEl, p) {
+  const pct = Math.max(0, Math.min(100, Number(p.percent) || 0));
+  const stateText = stateLabel(p);
+  const stateClass = p.state === 'error' ? 'error' : (p.state === 'done' ? 'done' : '');
+  const detailLine = (p.speed || p.eta)
+    ? `${p.speed || ''}${p.speed && p.eta ? ' · ' : ''}${p.eta ? 'ETA ' + p.eta : ''}`
+    : '';
+
+  // Bar bei "queued" indeterminate anzeigen, sonst feste Breite
+  const indet = (p.state === 'queued' || p.state === 'running' && pct === 0);
+
+  actionsEl.innerHTML = `
+    <div class="dl">
+      <div class="dl-row">
+        <div class="dl-bar"><div class="dl-bar-fill ${indet ? 'indeterminate' : ''}" style="width:${pct}%"></div></div>
+        <button class="dl-cancel" type="button" aria-label="Abbrechen" title="Abbrechen">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </div>
+      <div class="dl-stats">
+        <span class="dl-pct">${p.state === 'done' ? '✓ Fertig' : `${pct.toFixed(0)} %`}</span>
+        <span class="dl-state ${stateClass}">${stateText}${detailLine ? ' · ' + detailLine : ''}</span>
+      </div>
+    </div>
+  `;
+
+  const cancelBtn = actionsEl.querySelector('.dl-cancel');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => {
+      const card = actionsEl.closest('.card');
+      if (card) cancelJob(card.dataset.id);
+    });
+  }
+}
+
+function stateLabel(p) {
+  switch (p.state) {
+    case 'queued':
+      if (p.message) return p.message;
+      if (p.queue_position > 0) return `In Queue (Pos. ${p.queue_position})`;
+      return 'Wartet…';
+    case 'running': return 'Läuft';
+    case 'done': return 'Fertig';
+    case 'error': return p.error ? p.error.slice(0, 80) : 'Fehler';
+    case 'cancelled': return 'Abgebrochen';
+    default: return p.state || '';
+  }
+}
+
+function restoreCardActions(card, rec) {
+  const actions = card.querySelector('.card-actions');
+  if (!actions) return;
+  actions.innerHTML = '';
+  actions.appendChild(buildSplitButton(card, rec));
 }
 
 /* --- Loading recordings ------------------------------------------------- */
@@ -547,9 +758,8 @@ async function handleLogin(e) {
 
 function openSettings() {
   els.metubeHost.value = STATE.settings.metubeHost;
-  els.targetDownie.checked = STATE.settings.target === 'downie';
-  els.targetVlc.checked    = STATE.settings.target === 'vlc';
-  els.targetMetube.checked = STATE.settings.target === 'metube';
+  els.defaultTarget.value = STATE.settings.target;
+  els.bilingualToggle.checked = STATE.settings.bilingual;
   els.settingsModal.hidden = false;
 }
 
@@ -559,11 +769,10 @@ function closeSettings() {
 
 function handleSettingsSubmit(e) {
   e.preventDefault();
-  let target = 'downie';
-  if (els.targetVlc.checked) target = 'vlc';
-  else if (els.targetMetube.checked) target = 'metube';
-  STATE.settings.target = target;
+  const target = els.defaultTarget.value;
+  STATE.settings.target = TARGETS[target] ? target : 'downie';
   STATE.settings.metubeHost = els.metubeHost.value.trim();
+  STATE.settings.bilingual = !!els.bilingualToggle.checked;
   saveSettings();
 
   // Update all card buttons to reflect new default target

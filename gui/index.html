@@ -115,20 +115,28 @@
       <form id="settingsForm" class="form">
         <label class="field">
           <span>Standard-Download-Ziel</span>
-          <div class="segmented segmented-3">
-            <input type="radio" id="targetDownie" name="target" value="downie">
-            <label for="targetDownie">Downie</label>
-            <input type="radio" id="targetVlc" name="target" value="vlc">
-            <label for="targetVlc">VLC</label>
-            <input type="radio" id="targetMetube" name="target" value="metube">
-            <label for="targetMetube">Metube</label>
-          </div>
+          <select id="defaultTarget" class="select">
+            <option value="downie">Downie</option>
+            <option value="metube">Metube</option>
+            <option value="vlc">VLC</option>
+            <option value="local">Lokal (ffmpeg / yt-dlp)</option>
+          </select>
         </label>
 
         <label class="field">
           <span>Metube Host:Port</span>
           <input id="metubeHost" type="text" placeholder="192.168.178.14:8086">
           <small class="muted">Nur nötig, wenn Metube als Download-Ziel verwendet wird.</small>
+        </label>
+
+        <label class="field toggle-field">
+          <span>Bilingual</span>
+          <label class="toggle">
+            <input type="checkbox" id="bilingualToggle">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-text">Mehrere Tonspuren via yt-dlp (sonst ffmpeg)</span>
+          </label>
+          <small class="muted">Nur relevant für lokale Downloads. yt-dlp ist langsamer, kann aber mehrere Audio-/Untertitelspuren einbetten.</small>
         </label>
 
         <div class="modal-actions">

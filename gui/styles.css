@@ -618,6 +618,86 @@ code {
   margin-top: 6px;
 }
 
+/* Select dropdown (Settings → default target) */
+.select {
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  outline: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%239aa0b4'><path d='M7 10l5 5 5-5z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 18px;
+  padding-right: 36px;
+  transition: border-color .15s, background-color .15s;
+}
+
+.select:focus {
+  border-color: var(--accent);
+  background-color: var(--surface-2);
+}
+
+/* Toggle switch (Settings → bilingual) */
+.toggle-field { gap: 8px; }
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  user-select: none;
+}
+
+.toggle input[type=checkbox] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  width: 38px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background .18s, border-color .18s;
+  flex-shrink: 0;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-mute);
+  transition: transform .2s ease, background .18s;
+}
+
+.toggle input:checked + .toggle-track {
+  background: linear-gradient(135deg, var(--accent), #5a3fd9);
+  border-color: transparent;
+}
+
+.toggle input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+  background: white;
+}
+
+.toggle-text {
+  color: var(--text-dim);
+}
+
 /* Segmented control (Settings → target) */
 .segmented {
   display: inline-grid;
@@ -704,6 +784,94 @@ code {
 .toast.error::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); flex-shrink: 0; }
 
 .toast.info::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); flex-shrink: 0; }
+
+/* ==========================================================================
+   Download progress (lokale Downloads in Karte)
+   ========================================================================== */
+
+.dl {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dl-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  position: relative;
+}
+
+.dl-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  width: 0%;
+  transition: width .35s cubic-bezier(.4,.7,.3,1);
+  box-shadow: 0 0 12px rgba(124,92,255,0.5);
+}
+
+.dl-bar-fill.indeterminate {
+  width: 35% !important;
+  animation: indet 1.4s linear infinite;
+}
+
+@keyframes indet {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(285%); }
+}
+
+.dl-cancel {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s, border-color .15s;
+  flex-shrink: 0;
+}
+
+.dl-cancel:hover {
+  background: var(--surface-3);
+  color: var(--danger);
+  border-color: rgba(248,113,113,0.4);
+}
+
+.dl-cancel svg { width: 14px; height: 14px; }
+
+.dl-stats {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+}
+
+.dl-stats .dl-pct {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dl-stats .dl-state {
+  color: var(--text-dim);
+}
+
+.dl-stats .dl-state.error { color: var(--danger); }
+.dl-stats .dl-state.done  { color: var(--success); }
 
 /* ==========================================================================
    Pagination

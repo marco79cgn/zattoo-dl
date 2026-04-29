@@ -17,7 +17,11 @@ import http.server
 import io
 import json
 import os
+import queue
 import re
+import shlex
+import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -278,6 +282,402 @@ def _prepare_vod_playlist(client: "ZattooClient", stream_url: str) -> Path | Non
     return path
 
 
+# --- Lokale Downloads via ffmpeg / yt-dlp ---------------------------------
+# Serieller Job-Worker: nur ein Download zur Zeit, der Rest wartet in der
+# Queue. Frontend pollt /api/download/<id>/progress und zeigt Bar/ETA an.
+
+
+class DownloadJob:
+    __slots__ = (
+        "id", "recording_id", "stream_url", "filename", "bilingual",
+        "state", "percent", "speed", "eta", "error",
+        "process", "cancelled",
+        "queued_at", "started_at", "finished_at",
+        "total_seconds", "current_seconds",
+    )
+
+    def __init__(
+        self,
+        job_id: str,
+        recording_id: str,
+        stream_url: str,
+        filename: str,
+        bilingual: bool,
+    ) -> None:
+        self.id = job_id
+        self.recording_id = recording_id
+        self.stream_url = stream_url
+        self.filename = filename
+        self.bilingual = bilingual
+        self.state = "queued"  # queued | running | done | error | cancelled
+        self.percent = 0.0
+        self.speed = ""
+        self.eta = ""
+        self.error = ""
+        self.process: subprocess.Popen | None = None
+        self.cancelled = threading.Event()
+        self.queued_at = time.time()
+        self.started_at: float | None = None
+        self.finished_at: float | None = None
+        self.total_seconds = 0.0
+        self.current_seconds = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "recording_id": self.recording_id,
+            "state": self.state,
+            "percent": round(self.percent, 1),
+            "speed": self.speed,
+            "eta": self.eta,
+            "error": self.error,
+            "filename": self.filename,
+            "bilingual": self.bilingual,
+            "queued_at": self.queued_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+        }
+
+
+DOWNLOAD_QUEUE: "queue.Queue[str | None]" = queue.Queue()
+DOWNLOAD_JOBS: dict[str, DownloadJob] = {}
+DOWNLOAD_LOCK = threading.Lock()
+_WORKER_STARTED = False
+_WORKER_LOCK = threading.Lock()
+
+
+def _ensure_worker(client: "ZattooClient") -> None:
+    """Startet den Download-Worker-Thread genau einmal."""
+    global _WORKER_STARTED
+    with _WORKER_LOCK:
+        if _WORKER_STARTED:
+            return
+        t = threading.Thread(
+            target=_download_worker,
+            args=(client,),
+            daemon=True,
+            name="zattoo-dl-worker",
+        )
+        t.start()
+        _WORKER_STARTED = True
+
+
+def _download_worker(client: "ZattooClient") -> None:
+    """Verarbeitet die Queue seriell — nur ein Download zur Zeit."""
+    while True:
+        job_id = DOWNLOAD_QUEUE.get()
+        if job_id is None:
+            break
+        with DOWNLOAD_LOCK:
+            job = DOWNLOAD_JOBS.get(job_id)
+        if job is None:
+            continue
+        if job.cancelled.is_set():
+            if job.state == "queued":
+                job.state = "cancelled"
+                job.finished_at = time.time()
+            continue
+        try:
+            _run_local_download(client, job)
+        except Exception as e:  # noqa: BLE001
+            job.state = "error"
+            job.error = f"unerwarteter Fehler: {e}"
+            job.finished_at = time.time()
+
+
+def _hls_total_seconds(client: "ZattooClient", stream_url: str) -> float:
+    """Summiert die EXTINF-Werte einer HLS-Variant und liefert die Gesamtdauer."""
+    try:
+        master = _fetch_hls_text(client, stream_url)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+    if "#EXT-X-STREAM-INF" in master:
+        variant_url = _pick_best_variant(master, stream_url)
+        if not variant_url:
+            return 0.0
+        try:
+            content = _fetch_hls_text(client, variant_url)
+        except Exception:  # noqa: BLE001
+            return 0.0
+    else:
+        content = master
+
+    total = 0.0
+    for line in content.splitlines():
+        if line.startswith("#EXTINF:"):
+            m = re.match(r"#EXTINF:([\d.]+)", line)
+            if m:
+                try:
+                    total += float(m.group(1))
+                except ValueError:
+                    pass
+    return total
+
+
+def _format_speed(bytes_per_sec: float) -> str:
+    if bytes_per_sec >= 1024 * 1024:
+        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+    if bytes_per_sec >= 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    return f"{bytes_per_sec:.0f} B/s"
+
+
+def _format_eta(seconds: float) -> str:
+    if seconds <= 0:
+        return ""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60}s"
+    return f"{s // 3600}h {(s % 3600) // 60}m"
+
+
+def _safe_run_terminate(proc: subprocess.Popen) -> None:
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_local_download(client: "ZattooClient", job: DownloadJob) -> None:
+    """Führt den eigentlichen Download über ffmpeg oder yt-dlp aus."""
+    job.state = "running"
+    job.started_at = time.time()
+
+    # Gesamtdauer einmal aus der HLS-Playlist berechnen — für Prozent-Anzeige
+    job.total_seconds = _hls_total_seconds(client, job.stream_url)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_path = OUTPUT_DIR / f"{job.filename}.mp4"
+
+    if job.bilingual:
+        if not shutil.which("yt-dlp"):
+            job.state = "error"
+            job.error = "yt-dlp ist nicht installiert"
+            job.finished_at = time.time()
+            return
+        _run_yt_dlp(job, output_path)
+    else:
+        if not shutil.which("ffmpeg"):
+            job.state = "error"
+            job.error = "ffmpeg ist nicht installiert"
+            job.finished_at = time.time()
+            return
+        _run_ffmpeg(job, output_path)
+
+
+def _run_ffmpeg(job: DownloadJob, output_path: Path) -> None:
+    """ffmpeg-Aufruf analog zu zattoo-dl.sh:159, Progress über `-progress pipe:1`."""
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", job.stream_url,
+        "-map", "0:v:0", "-map", "0:a:0",
+        "-c", "copy",
+        "-progress", "pipe:1",
+        "-loglevel", "error",
+        str(output_path),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        job.state = "error"
+        job.error = "ffmpeg konnte nicht gestartet werden"
+        job.finished_at = time.time()
+        return
+
+    job.process = proc
+
+    while True:
+        if job.cancelled.is_set():
+            _safe_run_terminate(proc)
+            job.state = "cancelled"
+            job.finished_at = time.time()
+            job.process = None
+            return
+
+        line = proc.stdout.readline() if proc.stdout else ""
+        if not line:
+            break
+        line = line.strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        if key == "out_time_us":
+            try:
+                us = int(val)
+                job.current_seconds = us / 1_000_000
+                if job.total_seconds > 0:
+                    job.percent = min(99.9, (job.current_seconds / job.total_seconds) * 100)
+                    remaining = job.total_seconds - job.current_seconds
+                    job.eta = _format_eta(remaining)
+            except ValueError:
+                pass
+        elif key == "speed":
+            v = val.strip()
+            job.speed = "" if v in ("N/A", "") else f"{v} (Encoder)"
+        elif key == "progress" and val == "end":
+            break
+
+    rc = proc.wait()
+    job.process = None
+
+    if job.cancelled.is_set():
+        job.state = "cancelled"
+    elif rc == 0:
+        job.percent = 100.0
+        job.eta = ""
+        job.state = "done"
+    else:
+        err = ""
+        if proc.stderr:
+            try:
+                err = proc.stderr.read().strip()
+            except Exception:  # noqa: BLE001
+                pass
+        job.state = "error"
+        job.error = err or f"ffmpeg exit code {rc}"
+    job.finished_at = time.time()
+
+
+def _run_yt_dlp(job: DownloadJob, output_path: Path) -> None:
+    """yt-dlp-Aufruf analog zu zattoo-dl.sh:157 mit bilingualem Audio + Subs."""
+    progress_template = (
+        "DLPROGRESS:%(progress.downloaded_bytes)s/"
+        "%(progress.total_bytes_estimate)s/"
+        "%(progress.speed)s/"
+        "%(progress.eta)s"
+    )
+    cmd = [
+        "yt-dlp",
+        "--newline",
+        "--no-warnings",
+        "--audio-multistreams",
+        "-f", "bv+mergeall[vcodec=none]",
+        "--sub-langs", "en.*,de.*,fr.*,es.*",
+        "--embed-subs",
+        "--merge-output-format", "mp4",
+        "--progress-template", progress_template,
+        job.stream_url,
+        "-o", str(output_path),
+    ]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        job.state = "error"
+        job.error = "yt-dlp konnte nicht gestartet werden"
+        job.finished_at = time.time()
+        return
+
+    job.process = proc
+
+    while True:
+        if job.cancelled.is_set():
+            _safe_run_terminate(proc)
+            job.state = "cancelled"
+            job.finished_at = time.time()
+            job.process = None
+            return
+
+        line = proc.stdout.readline() if proc.stdout else ""
+        if not line:
+            break
+        line = line.strip()
+        if not line.startswith("DLPROGRESS:"):
+            continue
+        parts = line[len("DLPROGRESS:"):].split("/")
+        if len(parts) < 4:
+            continue
+        dl, total, speed, eta = parts[0], parts[1], parts[2], parts[3]
+        if dl and total and total not in ("NA", "None"):
+            try:
+                pct = (float(dl) / float(total)) * 100
+                job.percent = min(99.9, pct)
+            except (ValueError, ZeroDivisionError):
+                pass
+        if speed and speed not in ("NA", "None"):
+            try:
+                job.speed = _format_speed(float(speed))
+            except ValueError:
+                pass
+        if eta and eta not in ("NA", "None"):
+            try:
+                job.eta = _format_eta(float(eta))
+            except ValueError:
+                pass
+
+    rc = proc.wait()
+    job.process = None
+
+    if job.cancelled.is_set():
+        job.state = "cancelled"
+    elif rc == 0:
+        job.percent = 100.0
+        job.eta = ""
+        job.state = "done"
+    else:
+        err = ""
+        if proc.stderr:
+            try:
+                err = proc.stderr.read().strip()
+            except Exception:  # noqa: BLE001
+                pass
+        job.state = "error"
+        job.error = err or f"yt-dlp exit code {rc}"
+    job.finished_at = time.time()
+
+
+def _enqueue_local_download(
+    client: "ZattooClient",
+    recording_id: str,
+    stream_url: str,
+    filename: str,
+    bilingual: bool,
+) -> DownloadJob:
+    job_id = uuid.uuid4().hex[:8]
+    job = DownloadJob(job_id, recording_id, stream_url, filename, bilingual)
+    with DOWNLOAD_LOCK:
+        DOWNLOAD_JOBS[job_id] = job
+    DOWNLOAD_QUEUE.put(job_id)
+    _ensure_worker(client)
+    return job
+
+
+def _queue_position(job: DownloadJob) -> int:
+    """0 = laufender Job; ≥1 = wartend mit dieser Position vor sich."""
+    if job.state in ("done", "error", "cancelled"):
+        return 0
+    with DOWNLOAD_LOCK:
+        if job.state == "running":
+            return 0
+        ahead = 0
+        for j in DOWNLOAD_JOBS.values():
+            if j is job:
+                continue
+            if j.state == "running":
+                ahead += 1
+            elif j.state == "queued" and j.queued_at < job.queued_at:
+                ahead += 1
+        return ahead
+
+
 # --- Zattoo-Client ---------------------------------------------------------
 
 
@@ -521,6 +921,11 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             self._handle_thumbnail(urllib.parse.parse_qs(parsed.query))
             return
 
+        m = re.match(r"^/api/download/([a-f0-9]+)/progress$", path)
+        if m:
+            self._handle_progress(m.group(1))
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -535,6 +940,11 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/api/download":
             self._handle_download()
+            return
+
+        m = re.match(r"^/api/download/([a-f0-9]+)/cancel$", path)
+        if m:
+            self._handle_cancel(m.group(1))
             return
 
         self.send_error(404)
@@ -631,7 +1041,7 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
         if not rid:
             self._send_json(400, {"error": "recording_id fehlt"})
             return
-        valid_targets = ("downie", "vlc", "metube")
+        valid_targets = ("downie", "vlc", "metube", "local")
         if target not in valid_targets:
             self._send_json(400, {"error": f"target muss eines von {valid_targets} sein"})
             return
@@ -644,6 +1054,21 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             return
         except Exception as e:  # noqa: BLE001
             self._send_json(500, {"error": f"Stream-URL-Fehler: {e}"})
+            return
+
+        # Lokaler Download via ffmpeg/yt-dlp — geht in die serielle Queue
+        if target == "local":
+            bilingual = bool(body.get("bilingual", False))
+            filename = (body.get("filename") or "").strip() or f"recording-{rid}"
+            job = _enqueue_local_download(
+                self.client, rid, stream, filename, bilingual,
+            )
+            self._send_json(200, {
+                "ok": True,
+                "target": "local",
+                "job_id": job.id,
+                "queue_position": _queue_position(job),
+            })
             return
 
         # VLC: erst eine VOD-umgeschriebene Playlist als lokale Datei vorbereiten,
@@ -731,6 +1156,34 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             "metube": metube_resp,
         })
 
+    def _handle_progress(self, job_id: str) -> None:
+        with DOWNLOAD_LOCK:
+            job = DOWNLOAD_JOBS.get(job_id)
+        if job is None:
+            self._send_json(404, {"error": "job not found"})
+            return
+        d = job.to_dict()
+        d["queue_position"] = _queue_position(job)
+        self._send_json(200, d)
+
+    def _handle_cancel(self, job_id: str) -> None:
+        with DOWNLOAD_LOCK:
+            job = DOWNLOAD_JOBS.get(job_id)
+        if job is None:
+            self._send_json(404, {"error": "job not found"})
+            return
+        if job.state in ("done", "error", "cancelled"):
+            self._send_json(200, {"ok": True, "state": job.state})
+            return
+        # Worker-Thread sieht das Event und terminiert den Subprozess.
+        # Falls noch in Queue: state hier direkt umsetzen, der Worker
+        # überspringt die Job-ID dann.
+        job.cancelled.set()
+        if job.state == "queued":
+            job.state = "cancelled"
+            job.finished_at = time.time()
+        self._send_json(200, {"ok": True, "state": job.state})
+
     # -- Quieter logging --
 
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
@@ -748,10 +1201,10 @@ class ThreadingServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def _port_free(port: int) -> bool:
+def _port_free(bind: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:
-            s.bind(("127.0.0.1", port))
+            s.bind((bind, port))
             return True
         except OSError:
             return False
@@ -763,6 +1216,8 @@ def main() -> int:
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help=f"Port (Default: {DEFAULT_PORT})")
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="Bind-Adresse (Default: 127.0.0.1; für Docker 0.0.0.0)")
     parser.add_argument("--no-browser", action="store_true",
                         help="Browser nicht automatisch öffnen")
     args = parser.parse_args()
@@ -774,18 +1229,23 @@ def main() -> int:
         return 1
 
     port = args.port
-    if not _port_free(port):
-        print(f"⚠️  Port {port} belegt — nutze --port <anderer>", file=sys.stderr)
+    if not _port_free(args.bind, port):
+        print(f"⚠️  Port {port} auf {args.bind} belegt — nutze --port <anderer>",
+              file=sys.stderr)
         return 1
 
     GUIHandler.client = ZattooClient()
 
-    server = ThreadingServer(("127.0.0.1", port), GUIHandler)
-    url = f"http://127.0.0.1:{port}"
+    server = ThreadingServer((args.bind, port), GUIHandler)
+    display_host = "127.0.0.1" if args.bind in ("127.0.0.1", "localhost") else args.bind
+    url = f"http://{display_host}:{port}"
     print(f"🚀 Zattoo-DL GUI läuft auf {url}")
+    if args.bind == "0.0.0.0":
+        print("   ⚠️  Bind 0.0.0.0 — alle Interfaces, nur in vertrauten Netzen "
+              "oder hinter Reverse-Proxy verwenden.")
     print("   Strg+C zum Beenden.")
 
-    if not args.no_browser:
+    if not args.no_browser and args.bind in ("127.0.0.1", "localhost"):
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 
     try:
