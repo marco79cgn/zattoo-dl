@@ -17,8 +17,16 @@
       <span class="brand-name">Zattoo<span class="brand-name-dim">·DL</span></span>
     </div>
 
+    <nav class="tabs" id="tabs" hidden>
+      <button class="tab" type="button" data-view="recordings">Aufnahmen</button>
+      <button class="tab" type="button" data-view="downloads">
+        <span>Downloads</span>
+        <span class="tab-badge" id="dlBadge" hidden>0</span>
+      </button>
+    </nav>
+
     <div class="topbar-actions" hidden id="topbarActions">
-      <div class="search">
+      <div class="search" id="searchBox">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
           <path fill="currentColor" d="M10 2a8 8 0 1 1-5.293 14.293l-3.207 3.207-1.414-1.414 3.207-3.207A8 8 0 0 1 10 2zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/>
         </svg>
@@ -39,39 +47,47 @@
     </div>
   </header>
 
-  <!-- Stats / filter bar -->
-  <section class="stats" hidden id="statsBar">
-    <div class="stats-left">
-      <span id="countLabel">0 Aufnahmen</span>
-      <span class="dot">·</span>
-      <span id="filteredLabel" class="muted">0 angezeigt</span>
+  <!-- Recordings View (Default) -->
+  <section class="view" id="recordingsView">
+    <section class="stats" hidden id="statsBar">
+      <div class="stats-left">
+        <span id="countLabel">0 Aufnahmen</span>
+        <span class="dot">·</span>
+        <span id="filteredLabel" class="muted">0 angezeigt</span>
+      </div>
+      <div class="stats-right">
+        <span class="muted">Standard-Ziel:</span>
+        <span class="chip" id="defaultTargetChip">Downie</span>
+      </div>
+    </section>
+
+    <main class="grid" id="grid"></main>
+
+    <nav class="pagination" id="pagination" hidden aria-label="Seitennavigation"></nav>
+
+    <div class="state" id="emptyState" hidden>
+      <div class="state-inner">
+        <h2 id="emptyTitle">Keine Aufnahmen gefunden</h2>
+        <p id="emptyText" class="muted">Sobald du bei Zattoo Aufnahmen hast, erscheinen sie hier.</p>
+      </div>
     </div>
-    <div class="stats-right">
-      <span class="muted">Standard-Ziel:</span>
-      <span class="chip" id="defaultTargetChip">Downie</span>
+
+    <div class="state" id="loadingState">
+      <div class="state-inner">
+        <div class="spinner"></div>
+        <p class="muted">Aufnahmen werden geladen…</p>
+      </div>
     </div>
   </section>
 
-  <!-- Recordings grid -->
-  <main class="grid" id="grid"></main>
-
-  <!-- Pagination -->
-  <nav class="pagination" id="pagination" hidden aria-label="Seitennavigation"></nav>
-
-  <!-- Empty / loading state -->
-  <div class="state" id="emptyState" hidden>
-    <div class="state-inner">
-      <h2 id="emptyTitle">Keine Aufnahmen gefunden</h2>
-      <p id="emptyText" class="muted">Sobald du bei Zattoo Aufnahmen hast, erscheinen sie hier.</p>
-    </div>
-  </div>
-
-  <div class="state" id="loadingState">
-    <div class="state-inner">
-      <div class="spinner"></div>
-      <p class="muted">Aufnahmen werden geladen…</p>
-    </div>
-  </div>
+  <!-- Downloads View -->
+  <section class="view" id="downloadsView" hidden>
+    <header class="downloads-header">
+      <h2>Downloads</h2>
+      <p class="muted" id="downloadsSummary">Keine Downloads aktiv.</p>
+    </header>
+    <div class="downloads-list" id="downloadsList"></div>
+  </section>
 
   <!-- Login modal -->
   <div class="modal" id="loginModal" hidden>

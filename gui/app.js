@@ -17,6 +17,7 @@ const STATE = {
   recordings: [],
   filter: '',
   page: 1,
+  view: 'recordings',  // 'recordings' | 'downloads'
   settings: loadSettings(),
 };
 
@@ -26,9 +27,16 @@ let pollTimer = null;
 
 const els = {
   topbarActions: $('#topbarActions'),
+  searchBox: $('#searchBox'),
   filterInput: $('#filterInput'),
   refreshBtn: $('#refreshBtn'),
   settingsBtn: $('#settingsBtn'),
+  tabs: $('#tabs'),
+  dlBadge: $('#dlBadge'),
+  recordingsView: $('#recordingsView'),
+  downloadsView: $('#downloadsView'),
+  downloadsList: $('#downloadsList'),
+  downloadsSummary: $('#downloadsSummary'),
   grid: $('#grid'),
   loading: $('#loadingState'),
   empty: $('#emptyState'),
@@ -102,6 +110,123 @@ function toast(message, kind = 'info', timeout = 3500) {
     el.classList.add('fadeOut');
     setTimeout(() => el.remove(), 250);
   }, timeout);
+}
+
+/* --- View switching (Aufnahmen / Downloads) ----------------------------- */
+
+function setView(view) {
+  if (view !== 'recordings' && view !== 'downloads') view = 'recordings';
+  STATE.view = view;
+
+  els.recordingsView.hidden = view !== 'recordings';
+  els.downloadsView.hidden = view !== 'downloads';
+
+  // Topbar-Actions: Suchfeld + Refresh nur für Recordings sinnvoll
+  els.searchBox.hidden = view !== 'recordings';
+  els.refreshBtn.hidden = view !== 'recordings';
+
+  // Aktive Tab-Markierung
+  $$('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.view === view);
+  });
+
+  // Wenn wir auf Downloads wechseln, Liste neu rendern
+  if (view === 'downloads') renderDownloadsView();
+
+  // URL-Hash synchron halten
+  const wantHash = view === 'downloads' ? '#downloads' : '#recordings';
+  if (location.hash !== wantHash) {
+    history.replaceState(null, '', wantHash);
+  }
+}
+
+function updateDownloadsBadge() {
+  const n = ACTIVE_JOBS.size;
+  els.dlBadge.textContent = String(n);
+  els.dlBadge.hidden = n === 0;
+}
+
+function renderDownloadsView() {
+  const list = els.downloadsList;
+  list.innerHTML = '';
+
+  const n = ACTIVE_JOBS.size;
+  if (n === 0) {
+    els.downloadsSummary.textContent = 'Keine Downloads aktiv.';
+    list.innerHTML = `
+      <div class="downloads-empty">
+        <div class="downloads-empty-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+          </svg>
+        </div>
+        <p>Keine aktiven Downloads.</p>
+        <p class="muted">Klick auf einer Karte auf <strong>Lokal</strong>, um eine Aufnahme hier in die Queue zu legen.</p>
+      </div>`;
+    return;
+  }
+
+  els.downloadsSummary.textContent =
+    `${n} ${n === 1 ? 'Download' : 'Downloads'} in Bearbeitung`;
+
+  for (const [recId] of ACTIVE_JOBS) {
+    const rec = STATE.recordings.find(r => r.id === recId) || null;
+    const item = buildDownloadItem(recId, rec);
+    list.appendChild(item);
+    // Initiale Progress-Anzeige bis das Polling den ersten realen Wert liefert
+    const progressEl = item.querySelector('.dl-item-progress');
+    renderProgress(progressEl, {
+      state: 'queued', percent: 0, speed: '', eta: '',
+      message: 'Verbinde…',
+    });
+  }
+}
+
+function buildDownloadItem(recId, rec) {
+  const item = document.createElement('div');
+  item.className = 'dl-item';
+  item.dataset.id = recId;
+
+  // Thumbnail (oder Platzhalter, wenn keine Recording-Daten verfügbar)
+  if (rec && rec.thumbnail) {
+    const thumb = document.createElement('img');
+    thumb.className = 'dl-item-thumb';
+    thumb.alt = '';
+    thumb.loading = 'lazy';
+    thumb.src = `/api/thumbnail?id=${encodeURIComponent(recId)}&url=${encodeURIComponent(rec.thumbnail)}`;
+    thumb.addEventListener('error', () => {
+      thumb.replaceWith(makeThumbPlaceholder());
+    });
+    item.appendChild(thumb);
+  } else {
+    item.appendChild(makeThumbPlaceholder());
+  }
+
+  const info = document.createElement('div');
+  info.className = 'dl-item-info';
+
+  const title = document.createElement('div');
+  title.className = 'dl-item-title';
+  title.textContent = rec ? (rec.title || '–') : `Aufnahme ${recId}`;
+  info.appendChild(title);
+
+  const ep = document.createElement('div');
+  ep.className = 'dl-item-episode';
+  ep.textContent = rec && rec.episode ? rec.episode : (rec && rec.cid ? rec.cid : ' ');
+  info.appendChild(ep);
+
+  const progress = document.createElement('div');
+  progress.className = 'dl-item-progress';
+  info.appendChild(progress);
+
+  item.appendChild(info);
+  return item;
+}
+
+function makeThumbPlaceholder() {
+  const ph = document.createElement('div');
+  ph.className = 'dl-item-thumb';
+  return ph;
 }
 
 /* --- Date helpers ------------------------------------------------------- */
@@ -535,10 +660,14 @@ async function startLocalDownload(card, rec) {
   }
 
   ACTIVE_JOBS.set(rec.id, { jobId });
+  updateDownloadsBadge();
   renderProgress(actions, {
     state: 'queued', percent: 0, speed: '', eta: '',
     queue_position: 1, message: 'In Queue…',
   });
+  // Falls Downloads-View gerade offen ist: Liste neu aufbauen, damit der
+  // neue Eintrag sofort dort erscheint
+  if (STATE.view === 'downloads') renderDownloadsView();
   startPolling();
 }
 
@@ -574,10 +703,18 @@ async function pollOne(recId, jobId) {
     return; // Netzwerk-Hickup, einfach beim nächsten Tick erneut versuchen
   }
 
+  // Karte auf der Recordings-Seite
   const card = document.querySelector(`.card[data-id="${CSS.escape(recId)}"]`);
   if (card) {
     const actions = card.querySelector('.card-actions');
     if (actions) renderProgress(actions, body);
+  }
+
+  // Zeile auf der Downloads-Seite
+  const item = document.querySelector(`.dl-item[data-id="${CSS.escape(recId)}"]`);
+  if (item) {
+    const progressEl = item.querySelector('.dl-item-progress');
+    if (progressEl) renderProgress(progressEl, body);
   }
 
   if (body.state === 'done') {
@@ -591,6 +728,7 @@ async function pollOne(recId, jobId) {
 
 function finishJob(recId, jobId, state, error) {
   ACTIVE_JOBS.delete(recId);
+  updateDownloadsBadge();
   stopPollingIfIdle();
 
   const rec = STATE.recordings.find(r => r.id === recId);
@@ -604,11 +742,28 @@ function finishJob(recId, jobId, state, error) {
     toast(`${title}: Download abgebrochen.`, 'info', 3000);
   }
 
-  // Nach 1.5s zurück zum normalen Button (User hat Zeit, den finalen State zu sehen)
+  const settleDelay = state === 'done' ? 1500 : 600;
+
+  // Karte auf der Recordings-Seite zurücksetzen
   setTimeout(() => {
     const card = document.querySelector(`.card[data-id="${CSS.escape(recId)}"]`);
     if (card && rec) restoreCardActions(card, rec);
-  }, state === 'done' ? 1500 : 600);
+  }, settleDelay);
+
+  // Zeile auf der Downloads-Seite ausfaden + entfernen
+  setTimeout(() => {
+    const item = document.querySelector(`.dl-item[data-id="${CSS.escape(recId)}"]`);
+    if (!item) return;
+    item.classList.add('removing');
+    setTimeout(() => {
+      item.remove();
+      // Wenn Downloads-Liste jetzt leer und View aktiv: Empty-State zeigen
+      if (STATE.view === 'downloads' &&
+          els.downloadsList.querySelectorAll('.dl-item').length === 0) {
+        renderDownloadsView();
+      }
+    }, 280);
+  }, settleDelay);
 }
 
 async function cancelJob(recId) {
@@ -648,8 +803,8 @@ function renderProgress(actionsEl, p) {
   const cancelBtn = actionsEl.querySelector('.dl-cancel');
   if (cancelBtn) {
     cancelBtn.addEventListener('click', () => {
-      const card = actionsEl.closest('.card');
-      if (card) cancelJob(card.dataset.id);
+      const parent = actionsEl.closest('[data-id]');
+      if (parent) cancelJob(parent.dataset.id);
     });
   }
 }
@@ -710,7 +865,10 @@ async function loadRecordings({ force = false } = {}) {
 function showLogin() {
   els.loginModal.hidden = false;
   els.topbarActions.hidden = true;
+  els.tabs.hidden = true;
   els.statsBar.hidden = true;
+  els.recordingsView.hidden = true;
+  els.downloadsView.hidden = true;
   els.loading.hidden = true;
   els.empty.hidden = true;
   els.grid.innerHTML = '';
@@ -720,7 +878,9 @@ function showLogin() {
 function showApp() {
   els.loginModal.hidden = true;
   els.topbarActions.hidden = false;
+  els.tabs.hidden = false;
   els.statsBar.hidden = false;
+  // setView entscheidet, welche der beiden Views sichtbar wird
 }
 
 const hideLogin = showApp; // alias, behavior unchanged
@@ -791,6 +951,17 @@ async function handleLogout() {
 /* --- Wiring ------------------------------------------------------------- */
 
 function wire() {
+  // Tab-Buttons (Aufnahmen / Downloads)
+  $$('.tab').forEach(t => {
+    t.addEventListener('click', () => setView(t.dataset.view));
+  });
+
+  // Browser Back/Forward → Hash-Wechsel
+  window.addEventListener('hashchange', () => {
+    const v = location.hash === '#downloads' ? 'downloads' : 'recordings';
+    if (STATE.view !== v) setView(v);
+  });
+
   els.filterInput.addEventListener('input', (e) => {
     STATE.filter = e.target.value;
     STATE.page = 1;
@@ -836,6 +1007,9 @@ async function bootstrap() {
       // dann zeigt der erste render()-Lauf direkt die Progress-Bars an.
       await loadActiveJobs();
       await loadRecordings();
+      // Initial-View aus dem URL-Hash (z.B. http://…/#downloads)
+      const initialView = location.hash === '#downloads' ? 'downloads' : 'recordings';
+      setView(initialView);
     } else {
       showLogin();
     }
@@ -854,6 +1028,7 @@ async function loadActiveJobs() {
     for (const job of jobs) {
       ACTIVE_JOBS.set(job.recording_id, { jobId: job.id });
     }
+    updateDownloadsBadge();
     startPolling();
     const word = jobs.length === 1 ? 'aktiver Download' : 'aktive Downloads';
     toast(`${jobs.length} ${word} wieder verbunden.`, 'info', 3500);
