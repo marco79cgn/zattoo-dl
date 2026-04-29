@@ -246,48 +246,172 @@ def _rewrite_variant_for_vod(content: str, base_url: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def _collect_master_uris(master_content: str, base_url: str) -> list[tuple[str, str]]:
+    """Liefert (kind, absolute_url)-Tupel für alle referenzierten Sub-Playlists.
+    Wählt die beste Video-Variant (höchste BANDWIDTH) + ALLE Audio- und
+    Subtitle-Tracks (#EXT-X-MEDIA). I-Frame-Streams werden ignoriert."""
+    refs: list[tuple[str, str]] = []
+
+    # Audio- und Subtitle-Tracks aus #EXT-X-MEDIA-Zeilen
+    for raw in master_content.splitlines():
+        line = raw.strip()
+        if not line.startswith("#EXT-X-MEDIA:"):
+            continue
+        type_match = re.search(r"TYPE=(\w+)", line)
+        uri_match = re.search(r'URI="([^"]*)"', line)
+        if not (type_match and uri_match):
+            continue
+        kind = type_match.group(1).lower()
+        if kind not in ("audio", "subtitles"):
+            continue
+        abs_url = urllib.parse.urljoin(base_url, uri_match.group(1))
+        refs.append((kind, abs_url))
+
+    # Beste Video-Variant
+    best_video = _pick_best_variant(master_content, base_url)
+    if best_video:
+        refs.append(("video", best_video))
+
+    return refs
+
+
+def _rewrite_master_for_local(
+    master_content: str,
+    base_url: str,
+    local_map: dict[str, str],
+) -> str:
+    """Schreibt den Master so um, dass alle URIs auf lokale Dateien zeigen.
+    Dropped Varianten, die wir nicht heruntergeladen haben (z.B. niedrigere
+    Bitraten und I-Frame-Streams)."""
+    out: list[str] = []
+    pending_stream_inf: str | None = None
+
+    for raw in master_content.splitlines():
+        line = raw.rstrip("\r")
+        stripped = line.strip()
+
+        # I-Frame-Streams komplett rauswerfen — VLC braucht sie nicht
+        if stripped.startswith("#EXT-X-I-FRAME-STREAM-INF"):
+            continue
+
+        # #EXT-X-MEDIA: URI auf lokale Datei umbiegen oder Zeile droppen
+        if stripped.startswith("#EXT-X-MEDIA:"):
+            uri_match = re.search(r'URI="([^"]*)"', stripped)
+            if uri_match:
+                abs_url = urllib.parse.urljoin(base_url, uri_match.group(1))
+                if abs_url in local_map:
+                    out.append(re.sub(
+                        r'URI="[^"]*"',
+                        f'URI="{local_map[abs_url]}"',
+                        line, count=1,
+                    ))
+                # else: Track ohne lokale Datei → droppen
+            else:
+                # Keine URI im MEDIA-Tag (z.B. CLOSED-CAPTIONS) — beibehalten
+                out.append(line)
+            continue
+
+        # #EXT-X-STREAM-INF — buffern bis zur URI-Zeile
+        if stripped.startswith("#EXT-X-STREAM-INF"):
+            pending_stream_inf = line
+            continue
+
+        # URI-Zeile direkt nach STREAM-INF
+        if pending_stream_inf and stripped and not stripped.startswith("#"):
+            abs_url = urllib.parse.urljoin(base_url, stripped)
+            if abs_url in local_map:
+                out.append(pending_stream_inf)
+                out.append(local_map[abs_url])
+            # else: nicht in unserer Map → STREAM-INF + URI beide droppen
+            pending_stream_inf = None
+            continue
+
+        # Alle anderen Zeilen (#EXTM3U, #EXT-X-VERSION, etc.) durchreichen
+        out.append(line)
+
+    return "\n".join(out) + "\n"
+
+
+def _write_vod_debug_copy(content: str) -> None:
+    """Debug-Kopie unter festem Namen, damit man bei Fehlern leicht reinschauen kann."""
+    try:
+        (Path(tempfile.gettempdir()) / "zattoo-vlc-latest.m3u8").write_text(
+            content, encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
 def _prepare_vod_playlist(client: "ZattooClient", stream_url: str) -> Path | None:
-    """Holt die Zattoo-HLS-Playlist, schreibt sie auf VOD um, speichert sie
-    als lokale Datei. Liefert den Pfad, oder None wenn was schiefging."""
+    """Holt die HLS-Playlist von Zattoo, schreibt sie auf VOD um, speichert
+    sie lokal. Bei einem Master-Playlist mit mehreren Tracks (Video + Audio +
+    Subtitles) werden alle Sub-Playlists einzeln heruntergeladen und in ein
+    Verzeichnis abgelegt — der zurückgegebene Master verweist relativ auf
+    die lokalen Dateien. So sieht VLC alle Audiospuren + Untertitel."""
     try:
         master = _fetch_hls_text(client, stream_url)
     except Exception:  # noqa: BLE001
         return None
 
-    if "#EXT-X-STREAM-INF" in master:
-        variant_url = _pick_best_variant(master, stream_url)
-        if not variant_url:
-            return None
-        try:
-            variant = _fetch_hls_text(client, variant_url)
-        except Exception:  # noqa: BLE001
-            return None
-        variant_base = variant_url
-    else:
-        # Es war direkt eine Variant-Playlist (kein Master)
-        variant = master
-        variant_base = stream_url
-
-    rewritten = _rewrite_variant_for_vod(variant, variant_base)
-
     tmpdir = Path(tempfile.gettempdir())
-    path = tmpdir / f"zattoo-{uuid.uuid4().hex[:8]}.m3u8"
+
+    # Fall 1: direkte Variant-Playlist (kein Master) → eine einzelne Datei
+    if "#EXT-X-STREAM-INF" not in master:
+        rewritten = _rewrite_variant_for_vod(master, stream_url)
+        path = tmpdir / f"zattoo-{uuid.uuid4().hex[:8]}.m3u8"
+        try:
+            path.write_text(rewritten, encoding="utf-8")
+        except OSError:
+            return None
+        _write_vod_debug_copy(rewritten)
+        preview = "\n".join(rewritten.splitlines()[:8])
+        print(f"[vlc] vorbereitet (variant): {path}\n{preview}\n[…]",
+              file=sys.stderr, flush=True)
+        return path
+
+    # Fall 2: Master-Playlist → Verzeichnis mit master + allen Sub-Playlists
+    refs = _collect_master_uris(master, stream_url)
+    if not refs:
+        return None
+
+    work_dir = tmpdir / f"zattoo-{uuid.uuid4().hex[:8]}"
     try:
-        path.write_text(rewritten, encoding="utf-8")
+        work_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return None
 
-    # Debug-Kopie unter festem Namen, damit man bei Fehlern leicht reinschauen kann
+    local_map: dict[str, str] = {}
+    counter = {"video": 0, "audio": 0, "subtitles": 0}
+
+    for kind, abs_url in refs:
+        try:
+            content = _fetch_hls_text(client, abs_url)
+        except Exception:  # noqa: BLE001
+            continue
+        rewritten = _rewrite_variant_for_vod(content, abs_url)
+        local_name = f"{kind}-{counter[kind]}.m3u8"
+        counter[kind] += 1
+        try:
+            (work_dir / local_name).write_text(rewritten, encoding="utf-8")
+        except OSError:
+            continue
+        local_map[abs_url] = local_name
+
+    if not local_map:
+        return None
+
+    rewritten_master = _rewrite_master_for_local(master, stream_url, local_map)
+    master_path = work_dir / "master.m3u8"
     try:
-        (tmpdir / "zattoo-vlc-latest.m3u8").write_text(rewritten, encoding="utf-8")
+        master_path.write_text(rewritten_master, encoding="utf-8")
     except OSError:
-        pass
+        return None
 
-    # Auf dem Server-Stdout die ersten Zeilen der vorbereiteten Playlist zeigen
-    preview = "\n".join(rewritten.splitlines()[:8])
-    print(f"[vlc] vorbereitet: {path}\n{preview}\n[…]", file=sys.stderr, flush=True)
-
-    return path
+    _write_vod_debug_copy(rewritten_master)
+    print(f"[vlc] vorbereitet (master): {master_path} "
+          f"({counter['video']} video, {counter['audio']} audio, "
+          f"{counter['subtitles']} subs)", file=sys.stderr, flush=True)
+    return master_path
 
 
 # --- Lokale Downloads via ffmpeg / yt-dlp ---------------------------------
