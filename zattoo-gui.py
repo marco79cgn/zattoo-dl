@@ -919,6 +919,9 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/recordings":
             self._handle_recordings(force=False)
             return
+        if path == "/api/jobs":
+            self._handle_jobs_list()
+            return
         if path == "/api/thumbnail":
             self._handle_thumbnail(urllib.parse.parse_qs(parsed.query))
             return
@@ -1157,6 +1160,23 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             "target": "metube",
             "metube": metube_resp,
         })
+
+    def _handle_jobs_list(self) -> None:
+        """Liefert alle nicht-terminalen Jobs (queued + running) — vom Frontend
+        beim Bootstrap genutzt, um nach Page-Reload die Progress-Anzeige der
+        laufenden Downloads wiederherzustellen."""
+        with DOWNLOAD_LOCK:
+            active = [
+                j for j in DOWNLOAD_JOBS.values()
+                if j.state in ("queued", "running")
+            ]
+        items = []
+        for job in active:
+            d = job.to_dict()
+            d["queue_position"] = _queue_position(job)
+            items.append(d)
+        items.sort(key=lambda j: j["queued_at"])
+        self._send_json(200, {"jobs": items, "count": len(items)})
 
     def _handle_progress(self, job_id: str) -> None:
         with DOWNLOAD_LOCK:

@@ -832,6 +832,9 @@ async function bootstrap() {
     const { body } = await api('/api/session');
     if (body.logged_in) {
       showApp();
+      // Reihenfolge wichtig: erst aktive Jobs laden, dann Recordings rendern —
+      // dann zeigt der erste render()-Lauf direkt die Progress-Bars an.
+      await loadActiveJobs();
       await loadRecordings();
     } else {
       showLogin();
@@ -839,6 +842,23 @@ async function bootstrap() {
   } catch (e) {
     els.loading.hidden = true;
     toast(`Backend nicht erreichbar: ${e.message}. Läuft zattoo-gui.py noch?`, 'error', 8000);
+  }
+}
+
+async function loadActiveJobs() {
+  try {
+    const { ok, body } = await api('/api/jobs');
+    if (!ok) return;
+    const jobs = body.jobs || [];
+    if (jobs.length === 0) return;
+    for (const job of jobs) {
+      ACTIVE_JOBS.set(job.recording_id, { jobId: job.id });
+    }
+    startPolling();
+    const word = jobs.length === 1 ? 'aktiver Download' : 'aktive Downloads';
+    toast(`${jobs.length} ${word} wieder verbunden.`, 'info', 3500);
+  } catch {
+    // non-critical — UI funktioniert auch ohne Restore
   }
 }
 
