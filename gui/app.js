@@ -396,6 +396,11 @@ function buildCardMeta(rec) {
     return span;
   };
 
+  // Datum links, Logo rechts (margin-left: auto im CSS schiebt das Logo ans Ende)
+  const dateText = document.createElement('span');
+  dateText.textContent = formatDate(rec.start);
+  meta.appendChild(dateText);
+
   if (rec.logo_url) {
     const logo = document.createElement('img');
     logo.className = 'card-logo';
@@ -410,10 +415,6 @@ function buildCardMeta(rec) {
   } else if (rec.cid) {
     meta.appendChild(buildCidFallback());
   }
-
-  const dateText = document.createElement('span');
-  dateText.textContent = formatDate(rec.start);
-  meta.appendChild(dateText);
 
   return meta;
 }

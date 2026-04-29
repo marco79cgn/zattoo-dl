@@ -356,6 +356,7 @@ code {
   max-width: 64px;
   object-fit: contain;
   flex-shrink: 0;
+  margin-left: auto;  /* schiebt das Logo ans rechte Ende der Meta-Zeile */
   /* Die /black/-Variante in der Logo-URL ist bereits für dunklen
      Hintergrund optimiert (farbige Logos mit transparentem BG) —
      kein Color-Filter nötig. */
@@ -372,6 +373,7 @@ code {
   background: var(--surface-2);
   border: 1px solid var(--border);
   flex-shrink: 0;
+  margin-left: auto;  /* gleicher Effekt wie beim Logo, falls Fallback greift */
 }
 
 .card-title {
