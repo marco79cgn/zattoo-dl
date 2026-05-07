@@ -172,7 +172,14 @@
 
         <label class="field">
           <span>Ausgabe-Verzeichnis</span>
-          <input id="outputDir" type="text" placeholder="<auto>" autocomplete="off">
+          <div class="input-row">
+            <input id="outputDir" type="text" placeholder="<auto>" autocomplete="off">
+            <button type="button" class="btn-ghost btn-icon" id="outputDirBrowseBtn" title="Ordner auswählen" aria-label="Ordner auswählen">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path fill="currentColor" d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
+              </svg>
+            </button>
+          </div>
           <small class="muted" id="outputDirHint">Leer lassen für Default.</small>
         </label>
 

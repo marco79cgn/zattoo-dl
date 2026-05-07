@@ -217,6 +217,81 @@ def _open_with_app(app_name: str, url: str) -> tuple[bool, str]:
     return _run_open(["open", "-a", app_name, url])
 
 
+def _pick_folder_dialog(initial_dir: Path | None = None) -> tuple[str | None, str | None]:
+    """Öffnet einen nativen Folder-Picker. Gibt (Pfad, Fehler) zurück.
+
+    Bei Cancel: (None, None). Bei Fehler: (None, "...").
+    Blockiert den Request-Thread, bis der Dialog geschlossen wird (bis zu 5 min).
+    """
+    plat = sys.platform
+    initial = str(initial_dir) if initial_dir and initial_dir.exists() else None
+
+    if plat == "darwin":
+        prompt = "Ausgabe-Verzeichnis wählen"
+        if initial:
+            script = (
+                f'POSIX path of (choose folder with prompt "{prompt}" '
+                f'default location POSIX file "{initial}")'
+            )
+        else:
+            script = f'POSIX path of (choose folder with prompt "{prompt}")'
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return None, "Dialog hat länger als 5 Minuten gebraucht"
+        except FileNotFoundError:
+            return None, "osascript nicht gefunden"
+        if result.returncode == 0:
+            return result.stdout.decode("utf-8", "replace").strip().rstrip("/"), None
+        err = result.stderr.decode("utf-8", "replace").strip()
+        if "-128" in err or "User canceled" in err:
+            return None, None  # Cancel ist kein Fehler
+        return None, err or "Dialog konnte nicht geöffnet werden"
+
+    if plat.startswith("linux"):
+        for cmd in (
+            ["zenity", "--file-selection", "--directory", "--title=Ausgabe-Verzeichnis wählen"]
+            + (["--filename", initial + "/"] if initial else []),
+            ["kdialog", "--getexistingdirectory", initial or os.path.expanduser("~")],
+        ):
+            try:
+                r = subprocess.run(cmd, capture_output=True, timeout=300)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+            if r.returncode == 0:
+                return r.stdout.decode("utf-8", "replace").strip(), None
+            if r.returncode == 1:  # Cancel bei zenity/kdialog
+                return None, None
+        return None, "Weder zenity noch kdialog verfügbar — bitte Pfad manuell eintragen"
+
+    if plat == "win32":
+        ps = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$d.Description = 'Ausgabe-Verzeichnis wählen'; "
+            + (f"$d.SelectedPath = '{initial}'; " if initial else "")
+            + "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"
+        )
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True, timeout=300,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            return None, f"PowerShell-Dialog fehlgeschlagen: {e}"
+        path = r.stdout.decode("utf-8", "replace").strip()
+        if r.returncode == 0 and path:
+            return path, None
+        if r.returncode == 0:
+            return None, None  # Cancel
+        return None, r.stderr.decode("utf-8", "replace").strip() or "PowerShell-Fehler"
+
+    return None, f"Plattform {plat} wird vom Folder-Picker nicht unterstützt"
+
+
 # --- HLS-VOD-Preprocessing (für VLC-Start am Anfang) ----------------------
 # Zattoos HLS-Playlists kommen ohne #EXT-X-ENDLIST, damit DVR/Live-Streaming
 # möglich ist. VLC interpretiert das als Live und springt ans Ende. Wir holen
@@ -1237,6 +1312,9 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/config":
             self._handle_config_post()
             return
+        if path == "/api/pick-folder":
+            self._handle_pick_folder()
+            return
         if path == "/api/recordings/refresh":
             self._handle_recordings(force=True)
             return
@@ -1317,6 +1395,27 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             "default_output_dir": str(DEFAULT_OUTPUT_DIR.resolve()),
             "source": source,
         })
+
+    def _handle_pick_folder(self) -> None:
+        body = self._read_json_body()
+        raw_initial = body.get("initial") if isinstance(body, dict) else None
+        initial = None
+        if isinstance(raw_initial, str) and raw_initial.strip():
+            try:
+                initial = _normalize_path(raw_initial.strip())
+            except (OSError, ValueError):
+                initial = None
+        if initial is None:
+            initial = _current_output_dir()
+
+        path, err = _pick_folder_dialog(initial)
+        if err:
+            self._send_json(503, {"error": err})
+            return
+        if path is None:
+            self._send_json(200, {"cancelled": True})
+            return
+        self._send_json(200, {"path": path})
 
     def _handle_recordings(self, *, force: bool) -> None:
         if not self.client.is_logged_in():

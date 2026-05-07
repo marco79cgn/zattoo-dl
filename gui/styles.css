@@ -464,6 +464,25 @@ code {
   width: 100%;
 }
 
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.input-row > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-icon {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .split {
   display: flex;
   flex: 1;

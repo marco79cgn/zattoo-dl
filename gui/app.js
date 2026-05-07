@@ -71,6 +71,7 @@ const els = {
   enableMetubeToggle: $('#enableMetubeToggle'),
   outputDir: $('#outputDir'),
   outputDirHint: $('#outputDirHint'),
+  outputDirBrowseBtn: $('#outputDirBrowseBtn'),
   logoutBtn: $('#logoutBtn'),
 
   toasts: $('#toasts'),
@@ -1066,6 +1067,33 @@ async function handleSettingsSubmit(e) {
   toast('Einstellungen gespeichert.', 'success', 2200);
 }
 
+async function handlePickFolder() {
+  const btn = els.outputDirBrowseBtn;
+  btn.disabled = true;
+  const initial = els.outputDir.value.trim()
+    || (STATE.serverConfig && STATE.serverConfig.output_dir)
+    || '';
+  try {
+    const { ok, status, body } = await api('/api/pick-folder', {
+      method: 'POST',
+      body: JSON.stringify({ initial }),
+    });
+    if (!ok) {
+      toast(`Ordner-Auswahl nicht möglich: ${body.error || status}`, 'error', 4500);
+      return;
+    }
+    if (body.cancelled) return;
+    if (body.path) {
+      els.outputDir.value = body.path;
+      els.outputDir.focus();
+    }
+  } catch (e) {
+    toast(`Backend nicht erreichbar: ${e.message}`, 'error', 4500);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function handleLogout() {
   closeSettings();
   await fetch('/api/recordings/refresh', { method: 'POST' }).catch(() => {});
@@ -1101,6 +1129,7 @@ function wire() {
   els.settingsBtn.addEventListener('click', openSettings);
   els.settingsClose.addEventListener('click', closeSettings);
   els.settingsForm.addEventListener('submit', handleSettingsSubmit);
+  els.outputDirBrowseBtn.addEventListener('click', handlePickFolder);
   els.logoutBtn.addEventListener('click', handleLogout);
 
   els.loginForm.addEventListener('submit', handleLogin);
