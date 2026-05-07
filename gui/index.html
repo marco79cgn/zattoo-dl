@@ -155,6 +155,27 @@
           <small class="muted">Nur relevant für lokale Downloads. yt-dlp ist langsamer, kann aber mehrere Audio-/Untertitelspuren einbetten.</small>
         </label>
 
+        <label class="field toggle-field">
+          <span>Verfügbare Download-Ziele</span>
+          <label class="toggle">
+            <input type="checkbox" id="enableDownieToggle">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-text">Downie anzeigen</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="enableMetubeToggle">
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            <span class="toggle-text">Metube anzeigen</span>
+          </label>
+          <small class="muted">VLC und der lokale Download sind immer verfügbar.</small>
+        </label>
+
+        <label class="field">
+          <span>Ausgabe-Verzeichnis</span>
+          <input id="outputDir" type="text" placeholder="<auto>" autocomplete="off">
+          <small class="muted" id="outputDirHint">Leer lassen für Default.</small>
+        </label>
+
         <div class="modal-actions">
           <button type="button" class="btn-ghost" id="logoutBtn">Abmelden</button>
           <button type="submit" class="btn-primary">Speichern</button>

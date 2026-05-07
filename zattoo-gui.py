@@ -42,7 +42,20 @@ DOMAIN = "zattoo.com"
 WORKDIR = Path.cwd()
 COOKIE_FILE = WORKDIR / "cookies.txt"
 COOKIE_LOCK = WORKDIR / "cookies.txt.lock"
-OUTPUT_DIR = WORKDIR / "output"
+CONFIG_FILE = WORKDIR / "config.json"
+DEFAULT_OUTPUT_DIR = WORKDIR / "output"
+
+# Aktuell aufgelöster Output-Pfad und Quelle ("config" | "cli" | "env" | "default").
+# Wird in main() initialisiert und kann zur Laufzeit über /api/config geändert werden.
+CONFIG: dict[str, Any] = {
+    "output_dir": DEFAULT_OUTPUT_DIR,
+    "output_dir_source": "default",
+    "cli_output_dir": None,  # gemerkter --output-dir-Wert für Re-Resolution
+}
+
+
+def _cli_output_dir() -> str | None:
+    return CONFIG.get("cli_output_dir")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 GUI_DIR = SCRIPT_DIR / "gui"
@@ -93,7 +106,62 @@ def cookie_lock():
 def _ensure_dirs() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _current_output_dir().mkdir(parents=True, exist_ok=True)
+
+
+def _current_output_dir() -> Path:
+    return CONFIG["output_dir"]
+
+
+def _normalize_path(value: str) -> Path:
+    p = Path(value).expanduser()
+    if not p.is_absolute():
+        p = (WORKDIR / p).resolve()
+    else:
+        p = p.resolve()
+    return p
+
+
+def _load_config() -> dict[str, Any]:
+    """Liest config.json. Fehlt sie oder ist defekt, wird ein leeres Dict zurückgegeben."""
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"⚠️  config.json konnte nicht gelesen werden: {e}", file=sys.stderr)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_config(cfg: dict[str, Any]) -> None:
+    """Atomar nach config.json schreiben (temp + rename)."""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="config.", suffix=".json.tmp", dir=str(CONFIG_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp_path, CONFIG_FILE)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
+def _resolve_output_dir(cli_value: str | None) -> tuple[Path, str]:
+    """Reihenfolge: config.json > CLI-Flag > Env-Var > Default. Gibt (Pfad, Quelle) zurück."""
+    cfg = _load_config()
+    cfg_value = cfg.get("output_dir")
+    if isinstance(cfg_value, str) and cfg_value.strip():
+        return _normalize_path(cfg_value.strip()), "config"
+    if cli_value:
+        return _normalize_path(cli_value), "cli"
+    env_value = os.environ.get("ZATTOO_DL_OUTPUT_DIR")
+    if env_value and env_value.strip():
+        return _normalize_path(env_value.strip()), "env"
+    return DEFAULT_OUTPUT_DIR.resolve(), "default"
 
 
 def _iso_to_epoch(iso: str) -> int:
@@ -585,8 +653,9 @@ def _run_local_download(client: "ZattooClient", job: DownloadJob) -> None:
     # Gesamtdauer einmal aus der HLS-Playlist berechnen — für Prozent-Anzeige
     job.total_seconds = _hls_total_seconds(client, job.stream_url)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_path = OUTPUT_DIR / f"{job.filename}.mp4"
+    output_dir = _current_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{job.filename}.mp4"
 
     if job.bilingual:
         if not shutil.which("yt-dlp"):
@@ -1079,7 +1148,7 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
     client: ZattooClient = None  # type: ignore[assignment]
 
     URL_SCHEMES = {
-        "downie": "downie://XUOpenLink?url={url}",
+        "downie": "downie://XUOpenLink?url={url}&title={title}",
         "vlc": "vlc-x-callback://x-callback-url/stream?url={url}",
     }
 
@@ -1138,6 +1207,9 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/session":
             self._send_json(200, {"logged_in": self.client.is_logged_in()})
             return
+        if path == "/api/config":
+            self._handle_config_get()
+            return
         if path == "/api/recordings":
             self._handle_recordings(force=False)
             return
@@ -1161,6 +1233,9 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/login":
             self._handle_login()
+            return
+        if path == "/api/config":
+            self._handle_config_post()
             return
         if path == "/api/recordings/refresh":
             self._handle_recordings(force=True)
@@ -1192,6 +1267,56 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(401, {"error": str(e)})
         except Exception as e:  # noqa: BLE001
             self._send_json(500, {"error": f"Login-Fehler: {e}"})
+
+    def _handle_config_get(self) -> None:
+        self._send_json(200, {
+            "output_dir": str(CONFIG["output_dir"]),
+            "default_output_dir": str(DEFAULT_OUTPUT_DIR.resolve()),
+            "source": CONFIG["output_dir_source"],
+        })
+
+    def _handle_config_post(self) -> None:
+        body = self._read_json_body()
+        raw = body.get("output_dir")
+
+        cfg = _load_config()
+
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            # Override entfernen → fällt zurück auf CLI/Env/Default.
+            cfg.pop("output_dir", None)
+            try:
+                _save_config(cfg)
+            except OSError as e:
+                self._send_json(500, {"error": f"config.json konnte nicht geschrieben werden: {e}"})
+                return
+            new_dir, source = _resolve_output_dir(_cli_output_dir())
+        else:
+            if not isinstance(raw, str):
+                self._send_json(400, {"error": "output_dir muss ein String sein"})
+                return
+            try:
+                target = _normalize_path(raw.strip())
+                target.mkdir(parents=True, exist_ok=True)
+                if not os.access(target, os.W_OK):
+                    raise PermissionError(f"Kein Schreibzugriff auf {target}")
+            except (OSError, ValueError) as e:
+                self._send_json(400, {"error": f"Pfad ungültig: {e}"})
+                return
+            cfg["output_dir"] = str(target)
+            try:
+                _save_config(cfg)
+            except OSError as e:
+                self._send_json(500, {"error": f"config.json konnte nicht geschrieben werden: {e}"})
+                return
+            new_dir, source = target, "config"
+
+        CONFIG["output_dir"] = new_dir
+        CONFIG["output_dir_source"] = source
+        self._send_json(200, {
+            "output_dir": str(new_dir),
+            "default_output_dir": str(DEFAULT_OUTPUT_DIR.resolve()),
+            "source": source,
+        })
 
     def _handle_recordings(self, *, force: bool) -> None:
         if not self.client.is_logged_in():
@@ -1326,8 +1451,10 @@ class GUIHandler(http.server.BaseHTTPRequestHandler):
                     return
 
         if target in self.URL_SCHEMES:
+            title = (body.get("title") or "").strip()
             scheme_url = self.URL_SCHEMES[target].format(
-                url=urllib.parse.quote(stream, safe="")
+                url=urllib.parse.quote(stream, safe=""),
+                title=urllib.parse.quote(title, safe=""),
             )
             ok, err = _open_url(scheme_url)
             if ok:
@@ -1477,7 +1604,17 @@ def main() -> int:
                         help="Bind-Adresse (Default: 127.0.0.1; für Docker 0.0.0.0)")
     parser.add_argument("--no-browser", action="store_true",
                         help="Browser nicht automatisch öffnen")
+    parser.add_argument("-o", "--output-dir", default=None,
+                        help="Verzeichnis für lokale Downloads "
+                             "(überschreibt ZATTOO_DL_OUTPUT_DIR; "
+                             "wird wiederum vom UI-Override in config.json überschrieben).")
     args = parser.parse_args()
+
+    CONFIG["cli_output_dir"] = args.output_dir
+    out_dir, source = _resolve_output_dir(args.output_dir)
+    CONFIG["output_dir"] = out_dir
+    CONFIG["output_dir_source"] = source
+    print(f"📂 Output-Verzeichnis: {out_dir}  (Quelle: {source})")
 
     _ensure_dirs()
 

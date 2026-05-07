@@ -17,6 +17,7 @@ SEARCH_STRING=""
 BILINGUAL=0
 EXTERNAL_DL=""
 LIMIT_RESULTS=0
+OUTPUT_DIR="${ZATTOO_DL_OUTPUT_DIR:-$WORKDIR/output}"
 
 # Parse command-line arguments
 while [[ "$#" -gt 0 ]]; do
@@ -27,6 +28,7 @@ while [[ "$#" -gt 0 ]]; do
         -b|--bilingual) BILINGUAL=1 ;;
         -e|--external-dl) EXTERNAL_DL="$2"; shift ;;
         -l|--limit-results) LIMIT_RESULTS="$2"; shift ;;
+        -o|--output-dir) OUTPUT_DIR="$2"; shift ;;
         *) echo "Unknown parameter: $1"; exit 1 ;;
     esac
     shift
@@ -321,7 +323,7 @@ main() {
 
   echo
 
-  mkdir -p "$WORKDIR/output"
+  mkdir -p "$OUTPUT_DIR"
   i=1
   TOTAL=${#SELECTED_NUMS[@]}
   for NUM in "${SELECTED_NUMS[@]}"; do
@@ -340,7 +342,7 @@ main() {
       SAFE_TITLE=$(echo "$TITLE" | sed 's/[\/:*?"<>|\\]/ /g')
       SAFE_EPISODE=$(echo "$EPISODE" | sed 's/[\/:*?"<>|\\]/ /g')
 
-      BASE_FILENAME="$WORKDIR/output/${DATE_FORMATTED} ${SAFE_TITLE}"
+      BASE_FILENAME="$OUTPUT_DIR/${DATE_FORMATTED} ${SAFE_TITLE}"
       if [[ -n "$SAFE_EPISODE" && "$EPISODE" != "*" ]]; then
         BASE_FILENAME="${BASE_FILENAME} - ${SAFE_EPISODE}"
       fi

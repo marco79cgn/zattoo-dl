@@ -39,6 +39,7 @@ This script supports the following parameters:
 | `--bilingual` | `-b` | Enable download with multiple audio streams | `-b` | disabled by default |
 | `--external-dl` | `-e` | Forward Download to Metube (external tool) | `-e "192.168.178.14:8086"` | Empty = internal download via `ffmpeg`/`yt-dlp` |
 | `--limit-results` | `-l` | Number of recordings to display. Negative = last n recordings | `-l 10` or `-l -10` | default: show all recordings |
+| `--output-dir` | `-o` | Directory for downloaded files (also reads `ZATTOO_DL_OUTPUT_DIR` env var) | `-o /Volumes/media/zattoo` | default: `./output` |
 
 ### Notes on Required Parameters
 

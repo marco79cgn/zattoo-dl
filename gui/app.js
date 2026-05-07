@@ -24,6 +24,7 @@ const STATE = {
   page: 1,
   view: 'recordings',  // 'recordings' | 'downloads'
   settings: loadSettings(),
+  serverConfig: null,  // letzter /api/config-Snapshot
 };
 
 // recording_id → { jobId } für Polling und Re-Render-Persistenz
@@ -66,6 +67,10 @@ const els = {
   metubeHost: $('#metubeHost'),
   defaultTarget: $('#defaultTarget'),
   bilingualToggle: $('#bilingualToggle'),
+  enableDownieToggle: $('#enableDownieToggle'),
+  enableMetubeToggle: $('#enableMetubeToggle'),
+  outputDir: $('#outputDir'),
+  outputDirHint: $('#outputDirHint'),
   logoutBtn: $('#logoutBtn'),
 
   toasts: $('#toasts'),
@@ -80,6 +85,8 @@ function loadSettings() {
     target: TARGETS[s.target] ? s.target : 'downie',
     metubeHost: typeof s.metubeHost === 'string' ? s.metubeHost : '',
     bilingual: !!s.bilingual,
+    enabledDownie: s.enabledDownie !== false,
+    enabledMetube: s.enabledMetube !== false,
   };
 }
 
@@ -90,6 +97,19 @@ function saveSettings() {
 
 function updateDefaultTargetChip() {
   els.defaultTargetChip.textContent = TARGETS[STATE.settings.target] || 'Downie';
+}
+
+// VLC und 'local' sind immer verfügbar; Downie/Metube via Toggle.
+function enabledTargetIds() {
+  const ids = [];
+  if (STATE.settings.enabledDownie) ids.push('downie');
+  if (STATE.settings.enabledMetube) ids.push('metube');
+  ids.push('vlc', 'local');
+  return ids;
+}
+
+function isTargetEnabled(id) {
+  return enabledTargetIds().includes(id);
 }
 
 /* --- HTTP helpers -------------------------------------------------------- */
@@ -264,6 +284,12 @@ function safeFilename(rec) {
   let name = `${prefix}${title}`.trim();
   if (episode) name += ` - ${episode}`;
   return name;
+}
+
+function displayTitle(rec) {
+  const title = (rec.title || '').trim();
+  const episode = (rec.episode || '').trim();
+  return episode ? `${title} - ${episode}` : title;
 }
 
 /* --- Card rendering ----------------------------------------------------- */
@@ -559,12 +585,7 @@ function openMenu(anchor, card, rec) {
   titleEl.textContent = 'Optionen …';
   menu.appendChild(titleEl);
 
-  const targets = [
-    { id: 'downie', label: 'Downie' },
-    { id: 'metube', label: 'Metube' },
-    { id: 'vlc', label: 'VLC' },
-    { id: 'local', label: 'Download' },
-  ];
+  const targets = enabledTargetIds().map(id => ({ id, label: TARGETS[id] }));
   for (const t of targets) {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -624,6 +645,7 @@ async function triggerDownload(card, rec, target) {
     recording_id: rec.id,
     target,
     filename: safeFilename(rec),
+    title: displayTitle(rec),
     metube_host: STATE.settings.metubeHost,
   };
 
@@ -951,24 +973,91 @@ async function handleLogin(e) {
 
 /* --- Settings flow ------------------------------------------------------ */
 
-function openSettings() {
+const SOURCE_LABELS = {
+  config: 'gespeichert (config.json)',
+  cli: '--output-dir (CLI)',
+  env: 'ZATTOO_DL_OUTPUT_DIR (Env)',
+  default: 'Default',
+};
+
+async function loadServerConfig() {
+  try {
+    const { ok, body } = await api('/api/config');
+    if (!ok) return null;
+    STATE.serverConfig = body;
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+function refreshTargetOptionVisibility() {
+  if (!els.defaultTarget) return;
+  for (const opt of els.defaultTarget.options) {
+    opt.hidden = !isTargetEnabled(opt.value);
+  }
+}
+
+async function openSettings() {
   els.metubeHost.value = STATE.settings.metubeHost;
   els.defaultTarget.value = STATE.settings.target;
   els.bilingualToggle.checked = STATE.settings.bilingual;
+  els.enableDownieToggle.checked = STATE.settings.enabledDownie;
+  els.enableMetubeToggle.checked = STATE.settings.enabledMetube;
+  refreshTargetOptionVisibility();
+
+  els.outputDir.value = '';
+  els.outputDirHint.textContent = 'Lädt …';
   els.settingsModal.hidden = false;
+
+  const cfg = await loadServerConfig();
+  if (cfg) {
+    els.outputDir.value = cfg.source === 'config' ? cfg.output_dir : '';
+    els.outputDir.placeholder = cfg.output_dir || '<auto>';
+    const sourceLabel = SOURCE_LABELS[cfg.source] || cfg.source;
+    els.outputDirHint.textContent =
+      `Aktuell: ${cfg.output_dir} · Quelle: ${sourceLabel}. Leer lassen, um auf CLI/Env/Default zurückzufallen.`;
+  } else {
+    els.outputDirHint.textContent = 'Server-Konfiguration konnte nicht geladen werden.';
+  }
 }
 
 function closeSettings() {
   els.settingsModal.hidden = true;
 }
 
-function handleSettingsSubmit(e) {
+async function handleSettingsSubmit(e) {
   e.preventDefault();
-  const target = els.defaultTarget.value;
-  STATE.settings.target = TARGETS[target] ? target : 'downie';
+
+  STATE.settings.enabledDownie = !!els.enableDownieToggle.checked;
+  STATE.settings.enabledMetube = !!els.enableMetubeToggle.checked;
+
+  let target = els.defaultTarget.value;
+  if (!TARGETS[target] || !isTargetEnabled(target)) {
+    target = enabledTargetIds()[0] || 'local';
+  }
+  STATE.settings.target = target;
   STATE.settings.metubeHost = els.metubeHost.value.trim();
   STATE.settings.bilingual = !!els.bilingualToggle.checked;
   saveSettings();
+
+  // Server-Config nur senden, wenn das Feld geändert wurde.
+  const cfg = STATE.serverConfig || {};
+  const currentOverride = cfg.source === 'config' ? cfg.output_dir : '';
+  const newValue = els.outputDir.value.trim();
+  if (newValue !== currentOverride) {
+    const { ok, body } = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ output_dir: newValue || null }),
+    });
+    if (!ok) {
+      toast(`Output-Pfad nicht gespeichert: ${body.error || 'Fehler'}`, 'error', 4500);
+      return;
+    }
+    STATE.serverConfig = body;
+  }
+
+  refreshTargetOptionVisibility();
 
   // Update all card buttons to reflect new default target
   $$('.card .split-main').forEach(setMainButtonLabel);
