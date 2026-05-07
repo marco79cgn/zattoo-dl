@@ -937,7 +937,7 @@ function showApp() {
   els.topbarActions.hidden = false;
   els.tabs.hidden = false;
   els.statsBar.hidden = false;
-  // setView entscheidet, welche der beiden Views sichtbar wird
+  setView(STATE.view);
 }
 
 const hideLogin = showApp; // alias, behavior unchanged
